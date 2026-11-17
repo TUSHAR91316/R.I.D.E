@@ -1,9 +1,11 @@
 pub mod config;
 pub mod error;
+pub mod events;
 pub mod model;
 
 pub use config::{MemoryLimits, RideConfig, UiLayout};
 pub use error::{Result, RideError};
+pub use events::{LocalModel, ModelStatusEvent, new_event_bus, EVENT_BUS_CAPACITY};
 pub use model::{DiscoveredModel, ModelStatus, ProviderType, TokenChunk};
 
 pub const RIDE_VERSION: &str = env!("CARGO_PKG_VERSION");
