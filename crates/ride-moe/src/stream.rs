@@ -5,6 +5,8 @@
 //! channel that the UI can subscribe to without polling.
 
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{Disks, System};
 use tokio::sync::{broadcast, watch};
@@ -71,6 +73,8 @@ pub struct StreamMonitor {
     tx: watch::Sender<MoeStreamStats>,
     rx: watch::Receiver<MoeStreamStats>,
     event_tx: Option<broadcast::Sender<ModelStatusEvent>>,
+    tokens_counter: Arc<AtomicUsize>,
+    experts_counter: Arc<AtomicUsize>,
 }
 
 impl StreamMonitor {
@@ -82,6 +86,8 @@ impl StreamMonitor {
             tx,
             rx,
             event_tx: None,
+            tokens_counter: Arc::new(AtomicUsize::new(0)),
+            experts_counter: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -91,6 +97,16 @@ impl StreamMonitor {
             simulated: true,
             sample_interval: Duration::from_millis(100),
         })
+    }
+
+    /// Record newly generated tokens.
+    pub fn record_tokens(&self, count: usize) {
+        self.tokens_counter.fetch_add(count, Ordering::Relaxed);
+    }
+
+    /// Record newly swapped MoE experts.
+    pub fn record_expert_swapped(&self, count: usize) {
+        self.experts_counter.fetch_add(count, Ordering::Relaxed);
     }
 
     /// Attach the global `ModelStatusEvent` bus sender to publish `MoeStats` snapshots.
@@ -114,6 +130,23 @@ impl StreamMonitor {
     pub async fn run(self, cancel: CancellationToken) {
         let mut sim_counter: u64 = 0;
 
+        // Persistent system state across iterations to avoid reallocations
+        let mut live_sys = if !self.config.simulated {
+            let mut s = System::new();
+            s.refresh_memory();
+            Some(s)
+        } else {
+            None
+        };
+
+        let mut live_disks = if !self.config.simulated {
+            Some(Disks::new_with_refreshed_list())
+        } else {
+            None
+        };
+
+        let mut last_sample_time = std::time::Instant::now();
+
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {
@@ -121,21 +154,44 @@ impl StreamMonitor {
                     break;
                 }
                 _ = tokio::time::sleep(self.config.sample_interval) => {
+                    let elapsed = last_sample_time.elapsed().as_secs_f32().max(0.001);
+                    last_sample_time = std::time::Instant::now();
+
                     let stats = if self.config.simulated {
                         sim_counter = sim_counter.wrapping_add(1);
                         // Simulate realistic-looking NVMe streaming numbers
                         let bandwidth = 800.0 + (sim_counter as f32 * 7.3).sin() * 200.0;
                         let ram = 10.5 + (sim_counter as f32 * 0.1).cos() * 0.5;
+                        let custom_tokens = self.tokens_counter.load(Ordering::Relaxed);
+                        let custom_experts = self.experts_counter.load(Ordering::Relaxed);
                         MoeStreamStats {
-                            tokens_generated: (sim_counter * 3) as usize,
-                            experts_swapped: (sim_counter / 4) as usize,
+                            tokens_generated: if custom_tokens > 0 { custom_tokens } else { (sim_counter * 3) as usize },
+                            experts_swapped: if custom_experts > 0 { custom_experts } else { (sim_counter / 4) as usize },
                             nvme_bandwidth_mbs: bandwidth,
                             avg_token_latency_ms: 85.0 + (sim_counter as f32 * 2.1).sin() * 15.0,
                             system_ram_used_gb: ram,
-                            vram_used_gb: 0.0, // GPU detection not simulated
+                            vram_used_gb: 0.0,
                         }
                     } else {
-                        sample_live_stats()
+                        let sys = live_sys.as_mut().expect("live sys exists");
+                        let disks = live_disks.as_mut().expect("live disks exist");
+
+                        sys.refresh_memory();
+                        disks.refresh(false);
+
+                        // read_bytes is bytes read since last refresh call
+                        let read_bytes: u64 = disks.iter().map(|d| d.usage().read_bytes).sum();
+                        let nvme_mbs = (read_bytes as f32 / (1024.0 * 1024.0)) / elapsed;
+                        let ram_gb = sys.used_memory() as f32 / (1024.0 * 1024.0 * 1024.0);
+
+                        MoeStreamStats {
+                            tokens_generated: self.tokens_counter.load(Ordering::Relaxed),
+                            experts_swapped: self.experts_counter.load(Ordering::Relaxed),
+                            nvme_bandwidth_mbs: nvme_mbs,
+                            avg_token_latency_ms: 0.0,
+                            system_ram_used_gb: ram_gb,
+                            vram_used_gb: 0.0,
+                        }
                     };
 
                     // Send on watch channel; ignore error (receiver may have been dropped)
@@ -147,41 +203,12 @@ impl StreamMonitor {
                             throughput_mb_s: stats.nvme_bandwidth_mbs,
                             active_experts: stats.experts_swapped as u32,
                             ram_gb: stats.system_ram_used_gb,
+                            vram_gb: stats.vram_used_gb,
                         });
                     }
                 }
             }
         }
-    }
-}
-
-/// Sample real system stats using the `sysinfo` crate.
-fn sample_live_stats() -> MoeStreamStats {
-    let mut sys = System::new();
-    sys.refresh_memory();
-
-    let used_bytes = sys.used_memory();
-    let ram_gb = used_bytes as f32 / (1024.0 * 1024.0 * 1024.0);
-
-    // Sample disk reads across all block devices
-    let mut disks = Disks::new_with_refreshed_list();
-    // Brief pause then re-sample to calculate delta
-    std::thread::sleep(Duration::from_millis(50));
-    disks.refresh(false); // false = don't remove disks no longer listed
-
-    // Sum total bytes read across all disks as a rough throughput proxy.
-    // `sysinfo::Disk::usage()` returns a `DiskUsage` with `read_bytes`
-    // (bytes read since last refresh) and `total_read_bytes` (cumulative).
-    let total_read_bytes: u64 = disks.iter().map(|d| d.usage().total_read_bytes).sum();
-    let nvme_mb = total_read_bytes as f32 / (1024.0 * 1024.0);
-
-    MoeStreamStats {
-        tokens_generated: 0, // updated externally by the SSE consumer
-        experts_swapped: 0,
-        nvme_bandwidth_mbs: nvme_mb,
-        avg_token_latency_ms: 0.0,
-        system_ram_used_gb: ram_gb,
-        vram_used_gb: 0.0,
     }
 }
 
@@ -263,12 +290,36 @@ mod tests {
             .expect("event bus receive ok");
 
         match event {
-            ModelStatusEvent::MoeStats { throughput_mb_s, active_experts: _, ram_gb } => {
+            ModelStatusEvent::MoeStats { throughput_mb_s, active_experts: _, ram_gb, vram_gb: _ } => {
                 assert!(throughput_mb_s > 0.0);
                 assert!(ram_gb > 0.0);
             }
             _ => panic!("expected MoeStats event"),
         }
+
+        cancel.cancel();
+    }
+
+    #[tokio::test]
+    async fn test_stream_monitor_record_tokens_and_experts() {
+        let monitor = StreamMonitor::simulated();
+        monitor.record_tokens(42);
+        monitor.record_expert_swapped(8);
+
+        let mut rx = monitor.subscribe();
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        tokio::spawn(monitor.run(cancel_clone));
+
+        tokio::time::timeout(Duration::from_secs(2), rx.changed())
+            .await
+            .expect("should receive update")
+            .expect("channel ok");
+
+        let stats = rx.borrow().clone();
+        assert!(stats.tokens_generated >= 42);
+        assert!(stats.experts_swapped >= 8);
 
         cancel.cancel();
     }

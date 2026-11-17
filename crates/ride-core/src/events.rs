@@ -45,6 +45,8 @@ pub enum ModelStatusEvent {
         active_experts: u32,
         /// Total resident RAM used by the MoE process in GB
         ram_gb: f32,
+        /// Estimated VRAM used in GB (0.0 if not available)
+        vram_gb: f32,
     },
 }
 
@@ -111,13 +113,15 @@ mod tests {
             throughput_mb_s: 1024.5,
             active_experts: 8,
             ram_gb: 12.3,
+            vram_gb: 4.0,
         })
         .unwrap();
         let ev = rx.recv().await.unwrap();
-        if let ModelStatusEvent::MoeStats { throughput_mb_s, active_experts, ram_gb } = ev {
+        if let ModelStatusEvent::MoeStats { throughput_mb_s, active_experts, ram_gb, vram_gb } = ev {
             assert!((throughput_mb_s - 1024.5).abs() < 0.01);
             assert_eq!(active_experts, 8);
             assert!((ram_gb - 12.3).abs() < 0.01);
+            assert!((vram_gb - 4.0).abs() < 0.01);
         } else {
             panic!("wrong event variant");
         }

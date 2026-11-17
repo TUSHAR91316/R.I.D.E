@@ -29,6 +29,23 @@ pub struct MoeLauncherConfig {
     pub port: u16,
     /// Extra command-line arguments passed verbatim to the engine.
     pub extra_args: Vec<String>,
+    /// Which provider this engine represents. If None, inferred from binary name.
+    pub provider: Option<ride_core::ProviderType>,
+}
+
+impl MoeLauncherConfig {
+    /// Resolve the effective provider type (Colibrì or Rabbit).
+    pub fn resolved_provider(&self) -> ride_core::ProviderType {
+        if let Some(ref p) = self.provider {
+            return p.clone();
+        }
+        let bin_name = self.binary_path.to_string_lossy().to_lowercase();
+        if bin_name.contains("colibri") {
+            ride_core::ProviderType::ColibriMoe
+        } else {
+            ride_core::ProviderType::RabbitMoe
+        }
+    }
 }
 
 impl Default for MoeLauncherConfig {
@@ -38,6 +55,7 @@ impl Default for MoeLauncherConfig {
             model_dir: PathBuf::from("models"),
             port: 5000,
             extra_args: vec![],
+            provider: None,
         }
     }
 }
@@ -160,37 +178,76 @@ impl MoeLauncher {
             *guard = Some(child);
         }
 
-        // Spawn a watcher that updates state when the process exits
+        // Spawn a watcher that updates state when the process exits or cancellation fires
         {
             let state_ref = Arc::clone(&self.state);
             let child_ref = Arc::clone(&self.child);
             let event_tx = self.event_tx.clone();
+            let provider = self.config.resolved_provider();
+            let cancel_watcher = cancel.clone();
+
             tokio::spawn(async move {
                 loop {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    let mut child_guard = child_ref.lock().await;
-                    if let Some(ref mut c) = *child_guard {
-                        match c.try_wait() {
-                            Ok(Some(status)) => {
-                                let reason = format!("exited with status {status}");
-                                warn!("MoE engine process died: {reason}");
-                                let mut s = state_ref.lock().await;
-                                *s = ProcessState::Failed { reason };
-                                drop(s);
-                                *child_guard = None;
-                                let _ = event_tx.send(ModelStatusEvent::Disconnected {
-                                    provider: ride_core::ProviderType::RabbitMoe,
-                                });
-                                break;
+                    tokio::select! {
+                        _ = cancel_watcher.cancelled() => {
+                            let mut child_guard = child_ref.lock().await;
+                            if let Some(ref mut c) = *child_guard {
+                                #[cfg(target_os = "windows")]
+                                if let Some(pid) = c.id() {
+                                    let _ = std::process::Command::new("taskkill")
+                                        .args(["/F", "/PID", &pid.to_string()])
+                                        .output();
+                                }
+                                #[cfg(not(target_os = "windows"))]
+                                if let Some(pid) = c.id() {
+                                    unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+                                }
+                                let _ = tokio::time::timeout(Duration::from_secs(2), c.wait()).await;
                             }
-                            Ok(None) => {} // still running
-                            Err(e) => {
-                                error!("try_wait error: {e}");
+                            *child_guard = None;
+                            let mut s = state_ref.lock().await;
+                            let was_running = matches!(*s, ProcessState::Running { .. } | ProcessState::Starting);
+                            *s = ProcessState::Stopped;
+                            drop(s);
+                            if was_running {
+                                let _ = event_tx.send(ModelStatusEvent::Disconnected {
+                                    provider: provider.clone(),
+                                });
+                            }
+                            break;
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(250)) => {
+                            let mut child_guard = child_ref.lock().await;
+                            if let Some(ref mut c) = *child_guard {
+                                match c.try_wait() {
+                                    Ok(Some(status)) => {
+                                        let is_ok = status.success();
+                                        let mut s = state_ref.lock().await;
+                                        if is_ok {
+                                            info!("MoE engine process exited cleanly (status {status})");
+                                            *s = ProcessState::Stopped;
+                                        } else {
+                                            let reason = format!("exited with status {status}");
+                                            warn!("MoE engine process died: {reason}");
+                                            *s = ProcessState::Failed { reason };
+                                        }
+                                        drop(s);
+                                        *child_guard = None;
+                                        let _ = event_tx.send(ModelStatusEvent::Disconnected {
+                                            provider: provider.clone(),
+                                        });
+                                        break;
+                                    }
+                                    Ok(None) => {} // still running
+                                    Err(e) => {
+                                        error!("try_wait error: {e}");
+                                        break;
+                                    }
+                                }
+                            } else {
                                 break;
                             }
                         }
-                    } else {
-                        break;
                     }
                 }
             });
@@ -224,16 +281,17 @@ impl MoeLauncher {
                     .and_then(|n| n.to_str())
                     .unwrap_or("moe-model")
                     .to_string();
+                let provider = self.config.resolved_provider();
                 let models = vec![ride_core::LocalModel {
                     id: model_name.clone(),
                     name: model_name,
-                    provider: ride_core::ProviderType::RabbitMoe,
+                    provider: provider.clone(),
                     context_length: None,
                     is_moe: true,
                     port: self.config.port,
                 }];
                 let _ = self.event_tx.send(ModelStatusEvent::Connected {
-                    provider: ride_core::ProviderType::RabbitMoe,
+                    provider,
                     models,
                 });
                 return true;
@@ -248,6 +306,15 @@ impl MoeLauncher {
     /// On Windows: sends `taskkill /F /PID <pid>`.
     /// On Unix: sends `SIGTERM`.
     pub async fn shutdown(&self) -> Result<(), MoeError> {
+        let mut state = self.state.lock().await;
+        if *state == ProcessState::Stopped {
+            // Already stopped, nothing to do
+            return Ok(());
+        }
+        let was_active = matches!(*state, ProcessState::Running { .. } | ProcessState::Starting);
+        *state = ProcessState::Stopped;
+        drop(state);
+
         let mut child_guard = self.child.lock().await;
         if let Some(ref mut child) = *child_guard {
             #[cfg(target_os = "windows")]
@@ -272,13 +339,11 @@ impl MoeLauncher {
         }
         *child_guard = None;
 
-        let mut state = self.state.lock().await;
-        *state = ProcessState::Stopped;
-        drop(state);
-
-        let _ = self.event_tx.send(ModelStatusEvent::Disconnected {
-            provider: ride_core::ProviderType::RabbitMoe,
-        });
+        if was_active {
+            let _ = self.event_tx.send(ModelStatusEvent::Disconnected {
+                provider: self.config.resolved_provider(),
+            });
+        }
         info!("MoE engine shut down");
         Ok(())
     }
@@ -324,9 +389,33 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown_when_stopped_is_ok() {
-        let (launcher, _rx) = make_launcher();
+        let (launcher, mut rx) = make_launcher();
         // Shutdown on a not-yet-started launcher should not panic
         assert!(launcher.shutdown().await.is_ok());
+        // And should NOT send a Disconnected event when it was never active
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_resolved_provider_colibri_and_rabbit() {
+        let rabbit_cfg = MoeLauncherConfig {
+            binary_path: PathBuf::from("C:\\bin\\rabbit.exe"),
+            ..Default::default()
+        };
+        assert_eq!(rabbit_cfg.resolved_provider(), ride_core::ProviderType::RabbitMoe);
+
+        let colibri_cfg = MoeLauncherConfig {
+            binary_path: PathBuf::from("/usr/local/bin/colibri"),
+            ..Default::default()
+        };
+        assert_eq!(colibri_cfg.resolved_provider(), ride_core::ProviderType::ColibriMoe);
+
+        let explicit_cfg = MoeLauncherConfig {
+            binary_path: PathBuf::from("custom-bin"),
+            provider: Some(ride_core::ProviderType::ColibriMoe),
+            ..Default::default()
+        };
+        assert_eq!(explicit_cfg.resolved_provider(), ride_core::ProviderType::ColibriMoe);
     }
 
     #[tokio::test]
@@ -373,5 +462,30 @@ mod tests {
         // Should return false when timeout expires
         let ready = launcher.wait_until_ready(Duration::from_millis(300), &client).await;
         assert!(!ready);
+    }
+
+    #[tokio::test]
+    async fn test_process_clean_exit_sets_stopped_state() {
+        let (tx, mut rx) = ride_core::new_event_bus();
+        let cfg = MoeLauncherConfig {
+            binary_path: PathBuf::from("cmd"),
+            extra_args: vec!["/C".into(), "exit 0".into()],
+            port: 59877,
+            ..Default::default()
+        };
+        let launcher = MoeLauncher::new(cfg, tx);
+        let cancel = CancellationToken::new();
+
+        launcher.spawn(cancel).await.expect("cmd should spawn");
+
+        // Wait for process to exit cleanly and watcher to update state
+        tokio::time::sleep(Duration::from_millis(600)).await;
+
+        let state = launcher.state().await;
+        assert_eq!(state, ProcessState::Stopped, "clean exit with status 0 must be Stopped, not Failed");
+
+        // Disconnected event should have fired
+        let ev = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await;
+        assert!(ev.is_ok());
     }
 }

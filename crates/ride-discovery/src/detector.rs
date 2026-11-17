@@ -85,13 +85,31 @@ impl ModelDetector {
         let start = std::time::Instant::now();
         match self.client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
-                let latency = start.elapsed().as_millis() as u64;
-                ModelStatus {
-                    provider: endpoint.provider.clone(),
-                    endpoint: endpoint.base_url.clone(),
-                    is_online: true,
-                    active_model: None,
-                    latency_ms: Some(latency),
+                // Reject responses that are HTML web pages (e.g. dev servers, router pages)
+                let is_html = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|h| h.to_str().ok())
+                    .map(|ct| ct.contains("text/html"))
+                    .unwrap_or(false);
+
+                if is_html {
+                    ModelStatus {
+                        provider: endpoint.provider.clone(),
+                        endpoint: endpoint.base_url.clone(),
+                        is_online: false,
+                        active_model: None,
+                        latency_ms: None,
+                    }
+                } else {
+                    let latency = start.elapsed().as_millis() as u64;
+                    ModelStatus {
+                        provider: endpoint.provider.clone(),
+                        endpoint: endpoint.base_url.clone(),
+                        is_online: true,
+                        active_model: None,
+                        latency_ms: Some(latency),
+                    }
                 }
             }
             _ => ModelStatus {
@@ -150,6 +168,9 @@ impl ModelDetector {
 
     /// Run a background polling loop that periodically scans endpoints and broadcasts
     /// `Connected` and `Disconnected` events to `event_tx`.
+    ///
+    /// Probes endpoints concurrently and deduplicates events so subscribers are
+    /// not spammed with duplicate `Connected` events on every tick.
     pub async fn run_discovery_loop(
         &self,
         event_tx: tokio::sync::broadcast::Sender<ModelStatusEvent>,
@@ -157,7 +178,8 @@ impl ModelDetector {
         poll_interval: Duration,
     ) {
         use std::collections::HashMap;
-        let mut online_states: HashMap<ProviderType, bool> = HashMap::new();
+        // Keyed by (ProviderType, endpoint base_url)
+        let mut online_endpoints: HashMap<(ProviderType, String), Vec<LocalModel>> = HashMap::new();
 
         loop {
             tokio::select! {
@@ -166,14 +188,22 @@ impl ModelDetector {
                     break;
                 }
                 _ = tokio::time::sleep(poll_interval) => {
-                    for endpoint in &self.endpoints {
-                        let models_res = self.discover_models(endpoint).await;
-                        let was_online = online_states.get(&endpoint.provider).copied().unwrap_or(false);
+                    // Probe all endpoints concurrently rather than sequentially
+                    let probe_futs = self.endpoints.iter().map(|ep| async move {
+                        let res = self.discover_models(ep).await;
+                        (ep.clone(), res)
+                    });
+                    let results = futures_util::future::join_all(probe_futs).await;
+
+                    for (endpoint, models_res) in results {
+                        let key = (endpoint.provider.clone(), endpoint.base_url.clone());
+                        let prev_models = online_endpoints.get(&key);
 
                         match models_res {
                             Ok(models) => {
-                                if !was_online || !models.is_empty() {
-                                    online_states.insert(endpoint.provider.clone(), true);
+                                // Only broadcast Connected if newly online or if model list has changed
+                                if prev_models != Some(&models) {
+                                    online_endpoints.insert(key, models.clone());
                                     let _ = event_tx.send(ModelStatusEvent::Connected {
                                         provider: endpoint.provider.clone(),
                                         models,
@@ -181,11 +211,15 @@ impl ModelDetector {
                                 }
                             }
                             Err(_) => {
-                                if was_online {
-                                    online_states.insert(endpoint.provider.clone(), false);
-                                    let _ = event_tx.send(ModelStatusEvent::Disconnected {
-                                        provider: endpoint.provider.clone(),
-                                    });
+                                // If this endpoint was previously online, remove it and broadcast Disconnected
+                                if online_endpoints.remove(&key).is_some() {
+                                    // Only broadcast Disconnected if no other endpoint for this provider is still online
+                                    let provider_still_online = online_endpoints.keys().any(|(p, _)| p == &endpoint.provider);
+                                    if !provider_still_online {
+                                        let _ = event_tx.send(ModelStatusEvent::Disconnected {
+                                            provider: endpoint.provider.clone(),
+                                        });
+                                    }
                                 }
                             }
                         }

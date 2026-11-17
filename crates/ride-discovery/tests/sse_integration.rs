@@ -551,3 +551,186 @@ async fn test_discovery_loop_integration() {
 
     cancel.cancel();
 }
+
+#[tokio::test]
+async fn test_multibyte_utf8_split_across_chunks() {
+    use bytes::Bytes;
+    use futures_util::stream;
+    use std::convert::Infallible;
+
+    // "你" in UTF-8 is [0xE4, 0xBD, 0xA0]
+    // Chunk 1 ends with [0xE4, 0xBD], Chunk 2 starts with [0xA0]
+    let chunk1 = Bytes::from_static(b"{\"response\":\"\xe4\xbd");
+    let chunk2 = Bytes::from_static(b"\xa0\",\"done\":false}\n{\"response\":\"\",\"done\":true}\n");
+
+    let router = Router::new().route(
+        "/api/generate",
+        post(|| async move {
+            let s = stream::iter(vec![Ok::<_, Infallible>(chunk1), Ok::<_, Infallible>(chunk2)]);
+            axum::response::Response::builder()
+                .header("content-type", "application/x-ndjson")
+                .body(axum::body::Body::from_stream(s))
+                .unwrap()
+        }),
+    );
+
+    let addr = start_test_server(router).await;
+    let client = Client::new();
+    let (tx, mut rx) = mpsc::channel::<SseToken>(32);
+    let cancel = CancellationToken::new();
+
+    let req = client.post(format!("http://{addr}/api/generate"));
+    stream_sse(&client, req, SseFormat::Ollama, tx, cancel)
+        .await
+        .expect("stream should succeed");
+
+    let mut tokens = vec![];
+    while let Some(tok) = rx.recv().await {
+        if let SseToken::Delta(s) = tok {
+            tokens.push(s);
+        }
+    }
+
+    assert_eq!(tokens.join(""), "你", "multi-byte UTF-8 character must not be corrupted across chunk boundaries");
+}
+
+#[tokio::test]
+async fn test_trailing_line_without_newline() {
+    // Final line does not end with \n
+    let body = "{\"response\":\"final_word\",\"done\":false}";
+
+    let router = Router::new().route(
+        "/api/generate",
+        post(move || {
+            let body = body.to_string();
+            async move {
+                axum::response::Response::builder()
+                    .header("content-type", "application/x-ndjson")
+                    .body(axum::body::Body::from(body))
+                    .unwrap()
+            }
+        }),
+    );
+
+    let addr = start_test_server(router).await;
+    let client = Client::new();
+    let (tx, mut rx) = mpsc::channel::<SseToken>(32);
+    let cancel = CancellationToken::new();
+
+    let req = client.post(format!("http://{addr}/api/generate"));
+    stream_sse(&client, req, SseFormat::Ollama, tx, cancel)
+        .await
+        .expect("stream should succeed");
+
+    let mut tokens = vec![];
+    while let Some(tok) = rx.recv().await {
+        if let SseToken::Delta(s) = tok {
+            tokens.push(s);
+        }
+    }
+
+    assert_eq!(tokens, vec!["final_word".to_string()], "trailing line without newline must be delivered");
+}
+
+#[tokio::test]
+async fn test_html_endpoint_rejected_as_offline() {
+    use ride_core::ProviderType;
+    use ride_discovery::{ModelDetector, ProbeEndpoint};
+
+    let router = Router::new().route(
+        "/v1/models",
+        axum::routing::get(|| async {
+            axum::response::Response::builder()
+                .status(200)
+                .header("content-type", "text/html; charset=utf-8")
+                .body(axum::body::Body::from("<html><body>Custom Web Server</body></html>"))
+                .unwrap()
+        }),
+    );
+
+    let addr = start_test_server(router).await;
+    let ep = ProbeEndpoint::new(ProviderType::LmStudio, format!("http://{addr}"), "/v1/models");
+    let detector = ModelDetector::new(vec![ep.clone()]);
+
+    let status = detector.check_endpoint(&ep).await;
+    assert!(!status.is_online, "HTML 200 response must be recognized as NOT a model API");
+}
+
+#[tokio::test]
+async fn test_discovery_loop_deduplication() {
+    use ride_core::{ModelStatusEvent, ProviderType};
+    use ride_discovery::{ModelDetector, ProbeEndpoint};
+    use std::time::Duration;
+
+    let body = r#"{"models": [{"name": "qwen2.5-coder:7b"}]}"#;
+    let router = Router::new().route(
+        "/api/tags",
+        axum::routing::get(move || {
+            let body = body.to_string();
+            async move {
+                axum::response::Response::builder()
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body))
+                    .unwrap()
+            }
+        }),
+    );
+
+    let addr = start_test_server(router).await;
+    let detector = ModelDetector::new(vec![ProbeEndpoint::new(
+        ProviderType::Ollama,
+        format!("http://{addr}"),
+        "/api/tags",
+    )]);
+
+    let (event_tx, mut event_rx) = ride_core::new_event_bus();
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    tokio::spawn(async move {
+        detector
+            .run_discovery_loop(event_tx, cancel_clone, Duration::from_millis(30))
+            .await;
+    });
+
+    // Receive first Connected event
+    let ev = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+        .await
+        .expect("first event")
+        .expect("channel ok");
+    assert!(matches!(ev, ModelStatusEvent::Connected { .. }));
+
+    // Wait across multiple polling ticks (30ms * 4 = 120ms)
+    tokio::time::sleep(Duration::from_millis(120)).await;
+
+    // No duplicate Connected events should have been broadcast since model list is unchanged
+    assert!(event_rx.try_recv().is_err(), "should not spam Connected event when model list is unchanged");
+
+    cancel.cancel();
+}
+
+#[tokio::test]
+async fn test_ollama_dynamic_port_extraction() {
+    use ride_discovery::providers::ollama::list_models;
+
+    let body = r#"{"models": [{"name": "llama3:8b"}]}"#;
+    let router = Router::new().route(
+        "/api/tags",
+        axum::routing::get(move || {
+            let body = body.to_string();
+            async move {
+                axum::response::Response::builder()
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body))
+                    .unwrap()
+            }
+        }),
+    );
+
+    let addr = start_test_server(router).await;
+    let client = Client::new();
+    let models = list_models(&client, &format!("http://{addr}")).await.unwrap();
+
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].port, addr.port(), "port should be extracted from base_url, not hardcoded to 11434");
+}

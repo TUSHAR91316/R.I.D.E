@@ -26,10 +26,10 @@ pub enum SseToken {
 }
 
 /// Parse a single SSE `data:` line into an `SseToken` for Ollama's
-/// `/api/generate` format.
+/// `/api/generate` and `/api/chat` format.
 ///
 /// Ollama sends newline-delimited JSON objects with a `"response"` field
-/// and a `"done"` boolean.
+/// (or `"message.content"` for chat) and a `"done"` boolean.
 pub fn parse_ollama_chunk(data: &str) -> Option<SseToken> {
     let data = data.trim();
     if data.is_empty() {
@@ -41,6 +41,7 @@ pub fn parse_ollama_chunk(data: &str) -> Option<SseToken> {
                 return Some(SseToken::Done);
             }
             json.get("response")
+                .or_else(|| json.pointer("/message/content"))
                 .and_then(Value::as_str)
                 .map(|s| SseToken::Delta(s.to_owned()))
         }
@@ -65,8 +66,9 @@ pub fn parse_openai_chunk(data: &str) -> Option<SseToken> {
     }
     match serde_json::from_str::<Value>(data) {
         Ok(json) => {
-            // choices[0].delta.content
+            // choices[0].delta.content or legacy choices[0].text
             json.pointer("/choices/0/delta/content")
+                .or_else(|| json.pointer("/choices/0/text"))
                 .and_then(Value::as_str)
                 .map(|s| SseToken::Delta(s.to_owned()))
         }
@@ -74,6 +76,22 @@ pub fn parse_openai_chunk(data: &str) -> Option<SseToken> {
             warn!("OpenAI chunk parse error: {e} | raw: {data:?}");
             None
         }
+    }
+}
+
+/// Helper to parse a single line for the given SSE format.
+fn parse_line_for_format(line: &str, format: SseFormat) -> Option<SseToken> {
+    match format {
+        SseFormat::OpenAi => {
+            if let Some(rest) = line.strip_prefix("data:") {
+                let rest = rest.trim();
+                parse_openai_chunk(rest)
+            } else {
+                debug!("SSE non-data line: {line:?}");
+                None
+            }
+        }
+        SseFormat::Ollama => parse_ollama_chunk(line),
     }
 }
 
@@ -88,8 +106,9 @@ pub enum SseFormat {
 
 /// Stream tokens from an SSE endpoint into `tx`.
 ///
-/// The raw HTTP bytes are iterated without intermediate full-body allocation.
-/// Each `Bytes` chunk from reqwest is parsed line-by-line.
+/// The raw HTTP bytes are accumulated in a byte buffer to prevent multi-byte
+/// UTF-8 corruption across chunk boundaries. Complete lines delimited by `\n`
+/// are parsed as tokens.
 ///
 /// Returns `Ok(())` when the stream ends cleanly or the cancellation token
 /// fires. Returns `Err(_)` on HTTP or transport failures.
@@ -113,8 +132,8 @@ pub async fn stream_sse(
     }
 
     let mut byte_stream = response.bytes_stream();
-    // Buffer to accumulate incomplete lines across chunk boundaries
-    let mut line_buf = String::new();
+    // Raw byte buffer prevents UTF-8 character corruption on chunk boundaries
+    let mut byte_buf: Vec<u8> = Vec::new();
 
     loop {
         tokio::select! {
@@ -128,62 +147,58 @@ pub async fn stream_sse(
                     }
                 };
 
-                // Process the raw bytes as UTF-8 text, tolerating partial chars
-                let text = String::from_utf8_lossy(&chunk);
-                line_buf.push_str(&text);
+                byte_buf.extend_from_slice(&chunk);
 
                 // Process all complete lines in the buffer
-                while let Some(newline_pos) = line_buf.find('\n') {
-                    let line: String = line_buf.drain(..=newline_pos).collect();
+                while let Some(newline_pos) = byte_buf.iter().position(|&b| b == b'\n') {
+                    let line_bytes: Vec<u8> = byte_buf.drain(..=newline_pos).collect();
+                    let line = String::from_utf8_lossy(&line_bytes);
                     let line = line.trim_end_matches(['\n', '\r']);
 
-                    // SSE lines starting with "data:" (OpenAI format)
-                    // Ollama uses raw NDJSON (no "data:" prefix)
-                    let data = match format {
-                        SseFormat::OpenAi => {
-                            if let Some(rest) = line.strip_prefix("data:") {
-                                rest.trim()
-                            } else {
-                                // skip comment lines (": ping") and event: lines
-                                debug!("SSE non-data line: {line:?}");
-                                continue;
+                    if let Some(token) = parse_line_for_format(line, format) {
+                        match token {
+                            SseToken::Done => {
+                                let _ = tx.send(SseToken::Done).await;
+                                return Ok(());
                             }
-                        }
-                        SseFormat::Ollama => line,
-                    };
-
-                    let token = match format {
-                        SseFormat::Ollama => parse_ollama_chunk(data),
-                        SseFormat::OpenAi => parse_openai_chunk(data),
-                    };
-
-                    match token {
-                        Some(SseToken::Done) => {
-                            let _ = tx.send(SseToken::Done).await;
-                            return Ok(());
-                        }
-                        Some(tok) => {
-                            // Use select so cancellation can interrupt a blocked send
-                            tokio::select! {
-                                res = tx.send(tok) => {
-                                    if res.is_err() {
-                                        // Receiver dropped — treat as cancellation
+                            tok => {
+                                tokio::select! {
+                                    res = tx.send(tok) => {
+                                        if res.is_err() {
+                                            // Receiver dropped — treat as cancellation
+                                            return Ok(());
+                                        }
+                                    }
+                                    _ = cancel.cancelled() => {
+                                        debug!("SSE stream cancelled during send");
                                         return Ok(());
                                     }
                                 }
-                                _ = cancel.cancelled() => {
-                                    debug!("SSE stream cancelled during send");
-                                    return Ok(());
-                                }
                             }
                         }
-                        None => {}
                     }
                 }
             }
             _ = cancel.cancelled() => {
                 debug!("SSE stream cancelled");
                 return Ok(());
+            }
+        }
+    }
+
+    // Process any remaining bytes if stream ended without a trailing newline
+    if !byte_buf.is_empty() {
+        let line = String::from_utf8_lossy(&byte_buf);
+        let line = line.trim_end_matches(['\n', '\r']);
+        if let Some(token) = parse_line_for_format(line, format) {
+            match token {
+                SseToken::Done => {
+                    let _ = tx.send(SseToken::Done).await;
+                    return Ok(());
+                }
+                tok => {
+                    let _ = tx.send(tok).await;
+                }
             }
         }
     }
@@ -244,6 +259,13 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_ollama_chat_delta() {
+        let raw = r#"{"model":"llama3","message":{"role":"assistant","content":" Bonjour"},"done":false}"#;
+        let tok = parse_ollama_chunk(raw).expect("should parse chat delta");
+        assert!(matches!(tok, SseToken::Delta(ref s) if s == " Bonjour"));
+    }
+
+    #[test]
     fn test_parse_ollama_done() {
         let raw = r#"{"model":"llama3","response":"","done":true}"#;
         let tok = parse_ollama_chunk(raw).expect("should parse");
@@ -270,6 +292,13 @@ mod tests {
         let raw = r#"{"id":"chatcmpl-1","choices":[{"delta":{"content":" world"},"index":0}]}"#;
         let tok = parse_openai_chunk(raw).expect("should parse");
         assert!(matches!(tok, SseToken::Delta(ref s) if s == " world"));
+    }
+
+    #[test]
+    fn test_parse_openai_text_completion() {
+        let raw = r#"{"id":"cmpl-1","choices":[{"text":" universe","index":0}]}"#;
+        let tok = parse_openai_chunk(raw).expect("should parse legacy completion");
+        assert!(matches!(tok, SseToken::Delta(ref s) if s == " universe"));
     }
 
     #[test]

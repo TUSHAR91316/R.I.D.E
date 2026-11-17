@@ -31,6 +31,11 @@ pub async fn list_models(client: &Client, base_url: &str) -> Result<Vec<LocalMod
 
     let json: Value = resp.json().await.map_err(|e| DiscoveryError::Parse(e.to_string()))?;
 
+    let port = base_url
+        .rsplit_once(':')
+        .and_then(|(_, p)| p.trim_end_matches('/').parse::<u16>().ok())
+        .unwrap_or(11434);
+
     let models = json
         .get("models")
         .and_then(Value::as_array)
@@ -45,7 +50,7 @@ pub async fn list_models(client: &Client, base_url: &str) -> Result<Vec<LocalMod
                         provider: ProviderType::Ollama,
                         context_length: None,
                         is_moe,
-                        port: 11434,
+                        port,
                     })
                 })
                 .collect()

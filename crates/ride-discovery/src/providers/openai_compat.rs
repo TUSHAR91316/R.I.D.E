@@ -22,6 +22,10 @@ pub fn is_moe_model_name(name: &str) -> bool {
         || lower.contains("dbrx")
         || lower.contains("qwen1.5-moe")
         || lower.contains("57b-a14b")
+        || lower.contains("8x7b")
+        || lower.contains("8x22b")
+        || lower.contains("jamba")
+        || lower.contains("grok")
 }
 
 /// Parse a llama.cpp `/props` response into a normalized `LocalModel`.
@@ -31,14 +35,15 @@ pub fn parse_llama_props(json: &Value, port: u16) -> Option<LocalModel> {
         .or_else(|| json.pointer("/default_generation_settings/model"))
         .and_then(Value::as_str)?;
 
-    let id = std::path::Path::new(model_path)
-        .file_name()
-        .and_then(|f| f.to_str())
+    let id = model_path
+        .rsplit(['/', '\\'])
+        .next()
         .unwrap_or(model_path)
         .to_string();
 
     let context_length = json
         .pointer("/default_generation_settings/n_ctx")
+        .or_else(|| json.get("n_ctx"))
         .and_then(Value::as_u64)
         .map(|v| v as usize);
 
@@ -89,6 +94,7 @@ pub async fn list_models(
                     let context_length = m
                         .get("context_length")
                         .or_else(|| m.get("max_context_length"))
+                        .or_else(|| m.get("max_model_len"))
                         .and_then(Value::as_u64)
                         .map(|v| v as usize);
 
@@ -221,7 +227,21 @@ mod tests {
         assert!(is_moe_model_name("mixtral-8x7b-instruct"));
         assert!(is_moe_model_name("qwen1.5-moe-a2.7b"));
         assert!(is_moe_model_name("dbrx-instruct"));
+        assert!(is_moe_model_name("Mixtral-8x22B-Instruct-v0.1"));
+        assert!(is_moe_model_name("grok-1"));
         assert!(!is_moe_model_name("llama-3-8b-instruct"));
         assert!(!is_moe_model_name("mistral-7b-v0.1"));
+    }
+
+    #[test]
+    fn test_parse_llama_props_windows_path() {
+        let json = serde_json::json!({
+            "model_path": "C:\\LLMs\\GGUF\\mixtral-8x7b-v0.1.Q5_K_M.gguf",
+            "n_ctx": 16384
+        });
+        let model = parse_llama_props(&json, 8080).expect("should parse windows path");
+        assert_eq!(model.id, "mixtral-8x7b-v0.1.Q5_K_M.gguf");
+        assert_eq!(model.context_length, Some(16384));
+        assert!(model.is_moe);
     }
 }
