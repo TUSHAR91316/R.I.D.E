@@ -1,0 +1,17 @@
+# Rust target directory
+/target
+
+# Cargo lockfile (for libraries/workspaces as needed, but target is main ignore)
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.iml
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Local skills and model weight caches
+models/
+.ride/

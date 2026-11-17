@@ -1,0 +1,16 @@
+[package]
+name = "ride-desktop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+ride-core = { workspace = true }
+ride-discovery = { workspace = true }
+ride-moe = { workspace = true }
+ride-skills = { workspace = true }
+ride-agent = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
