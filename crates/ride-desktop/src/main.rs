@@ -20,6 +20,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let online_count = statuses.iter().filter(|s| s.is_online).count();
     info!("Local model discovery scanned {} endpoints. Online: {}", statuses.len(), online_count);
 
+    let models = detector.discover_all_models().await;
+    info!("Discovered {} local models across all providers", models.len());
+    for m in &models {
+        info!("  - [{:?}] {} (MoE: {}, ctx: {:?})", m.provider, m.id, m.is_moe, m.context_length);
+    }
+
     let moe_manager = MoeEngineManager::new(Default::default());
     info!("MoE engine integration ready on port {}", moe_manager.config().port);
 

@@ -7,9 +7,11 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use sysinfo::{Disks, System};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
+
+use ride_core::ModelStatusEvent;
 
 /// Real-time MoE streaming statistics snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,17 +65,24 @@ impl Default for StreamMonitorConfig {
 ///
 /// Publishes snapshots via a `tokio::sync::watch` channel at
 /// `config.sample_interval` intervals. Stops cleanly when `cancel` fires.
+/// Optionally broadcasts `ModelStatusEvent::MoeStats` to the global event bus.
 pub struct StreamMonitor {
     config: StreamMonitorConfig,
     tx: watch::Sender<MoeStreamStats>,
     rx: watch::Receiver<MoeStreamStats>,
+    event_tx: Option<broadcast::Sender<ModelStatusEvent>>,
 }
 
 impl StreamMonitor {
     /// Create a new `StreamMonitor` with the given configuration.
     pub fn new(config: StreamMonitorConfig) -> Self {
         let (tx, rx) = watch::channel(MoeStreamStats::default());
-        Self { config, tx, rx }
+        Self {
+            config,
+            tx,
+            rx,
+            event_tx: None,
+        }
     }
 
     /// Create a new `StreamMonitor` in simulated mode (for testing).
@@ -82,6 +91,12 @@ impl StreamMonitor {
             simulated: true,
             sample_interval: Duration::from_millis(100),
         })
+    }
+
+    /// Attach the global `ModelStatusEvent` bus sender to publish `MoeStats` snapshots.
+    pub fn with_event_bus(mut self, tx: broadcast::Sender<ModelStatusEvent>) -> Self {
+        self.event_tx = Some(tx);
+        self
     }
 
     /// Subscribe to the stats watch channel.
@@ -123,8 +138,17 @@ impl StreamMonitor {
                         sample_live_stats()
                     };
 
-                    // Send; ignore error (receiver may have been dropped)
-                    let _ = self.tx.send(stats);
+                    // Send on watch channel; ignore error (receiver may have been dropped)
+                    let _ = self.tx.send(stats.clone());
+
+                    // Send on global event bus if configured
+                    if let Some(ref bus) = self.event_tx {
+                        let _ = bus.send(ModelStatusEvent::MoeStats {
+                            throughput_mb_s: stats.nvme_bandwidth_mbs,
+                            active_experts: stats.experts_swapped as u32,
+                            ram_gb: stats.system_ram_used_gb,
+                        });
+                    }
                 }
             }
         }
@@ -222,5 +246,30 @@ mod tests {
             sample_interval: Duration::from_millis(100),
         };
         assert!(cfg.simulated);
+    }
+
+    #[tokio::test]
+    async fn test_stream_monitor_publishes_to_event_bus() {
+        let (bus_tx, mut bus_rx) = ride_core::new_event_bus();
+        let monitor = StreamMonitor::simulated().with_event_bus(bus_tx);
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        tokio::spawn(monitor.run(cancel_clone));
+
+        let event = tokio::time::timeout(Duration::from_secs(2), bus_rx.recv())
+            .await
+            .expect("should receive event within 2s")
+            .expect("event bus receive ok");
+
+        match event {
+            ModelStatusEvent::MoeStats { throughput_mb_s, active_experts: _, ram_gb } => {
+                assert!(throughput_mb_s > 0.0);
+                assert!(ram_gb > 0.0);
+            }
+            _ => panic!("expected MoeStats event"),
+        }
+
+        cancel.cancel();
     }
 }

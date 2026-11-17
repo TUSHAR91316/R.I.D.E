@@ -193,6 +193,43 @@ pub async fn stream_sse(
     Ok(())
 }
 
+/// Stream tokens from an SSE endpoint directly to the global `ModelStatusEvent` broadcast channel.
+///
+/// Converts each `SseToken::Delta(token)` into `ModelStatusEvent::TokenGenerated { token }`
+/// and `SseToken::Done` into `ModelStatusEvent::GenerationComplete`.
+pub async fn stream_sse_to_event_bus(
+    client: &Client,
+    request: reqwest::RequestBuilder,
+    format: SseFormat,
+    event_tx: tokio::sync::broadcast::Sender<ride_core::ModelStatusEvent>,
+    cancel: CancellationToken,
+) -> Result<(), DiscoveryError> {
+    let (tx, mut rx) = mpsc::channel::<SseToken>(64);
+    let cancel_stream = cancel.clone();
+
+    let client = client.clone();
+    let stream_handle = tokio::spawn(async move {
+        stream_sse(&client, request, format, tx, cancel_stream).await
+    });
+
+    while let Some(token) = rx.recv().await {
+        match token {
+            SseToken::Delta(tok) => {
+                let _ = event_tx.send(ride_core::ModelStatusEvent::TokenGenerated { token: tok });
+            }
+            SseToken::Done => {
+                let _ = event_tx.send(ride_core::ModelStatusEvent::GenerationComplete);
+                break;
+            }
+        }
+    }
+
+    match stream_handle.await {
+        Ok(res) => res,
+        Err(e) => Err(DiscoveryError::Http(e.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

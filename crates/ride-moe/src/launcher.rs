@@ -103,7 +103,14 @@ impl MoeLauncher {
         }
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        let mut child = cmd.spawn().map_err(|e| MoeError::Spawn(e.to_string()))?;
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                let mut state = self.state.lock().await;
+                *state = ProcessState::Failed { reason: e.to_string() };
+                return Err(MoeError::Spawn(e.to_string()));
+            }
+        };
         let pid = child.id().unwrap_or(0);
 
         info!("MoE engine spawned: pid={pid} binary={:?}", self.config.binary_path);
@@ -205,6 +212,37 @@ impl MoeLauncher {
             .unwrap_or(false)
     }
 
+    /// Wait for the engine to respond to `/health`, then broadcast `ModelStatusEvent::Connected`.
+    pub async fn wait_until_ready(&self, timeout: Duration, client: &reqwest::Client) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            if self.ping_health(client).await {
+                let model_name = self
+                    .config
+                    .model_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("moe-model")
+                    .to_string();
+                let models = vec![ride_core::LocalModel {
+                    id: model_name.clone(),
+                    name: model_name,
+                    provider: ride_core::ProviderType::RabbitMoe,
+                    context_length: None,
+                    is_moe: true,
+                    port: self.config.port,
+                }];
+                let _ = self.event_tx.send(ModelStatusEvent::Connected {
+                    provider: ride_core::ProviderType::RabbitMoe,
+                    models,
+                });
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        false
+    }
+
     /// Gracefully shut down the managed engine process.
     ///
     /// On Windows: sends `taskkill /F /PID <pid>`.
@@ -280,11 +318,8 @@ mod tests {
         let cancel = CancellationToken::new();
         let result = launcher.spawn(cancel).await;
         assert!(result.is_err());
-        // State should not be Running after a failed spawn
         let state = launcher.state().await;
-        // State is still Starting because we set it before the error,
-        // but it's definitely not Running { .. }
-        assert!(!matches!(state, ProcessState::Running { .. }));
+        assert!(matches!(state, ProcessState::Failed { .. }));
     }
 
     #[tokio::test]
@@ -324,5 +359,19 @@ mod tests {
         // Should have received a Disconnected event
         let ev = tokio::time::timeout(Duration::from_secs(1), rx.recv()).await;
         assert!(ev.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_wait_until_ready_timeout_on_dead_port() {
+        let (tx, _rx) = ride_core::new_event_bus();
+        let cfg = MoeLauncherConfig {
+            port: 65431, // nothing listening
+            ..Default::default()
+        };
+        let launcher = MoeLauncher::new(cfg, tx);
+        let client = reqwest::Client::new();
+        // Should return false when timeout expires
+        let ready = launcher.wait_until_ready(Duration::from_millis(300), &client).await;
+        assert!(!ready);
     }
 }

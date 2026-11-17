@@ -1,6 +1,11 @@
 use ride_core::model::{ModelStatus, ProviderType};
+use ride_core::{LocalModel, ModelStatusEvent};
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
+
+use crate::error::DiscoveryError;
+use crate::providers::{ollama, openai_compat};
 
 #[derive(Debug, Clone)]
 pub struct ProbeEndpoint {
@@ -20,6 +25,13 @@ impl ProbeEndpoint {
 
     pub fn full_probe_url(&self) -> String {
         format!("{}{}", self.base_url.trim_end_matches('/'), self.probe_path)
+    }
+
+    pub fn port(&self) -> u16 {
+        self.base_url
+            .rsplit_once(':')
+            .and_then(|(_, p)| p.trim_end_matches('/').parse::<u16>().ok())
+            .unwrap_or_else(|| self.provider.default_port())
     }
 }
 
@@ -63,6 +75,10 @@ impl ModelDetector {
         &self.endpoints
     }
 
+    pub fn client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
     pub async fn check_endpoint(&self, endpoint: &ProbeEndpoint) -> ModelStatus {
         let url = endpoint.full_probe_url();
         debug!("Probing model endpoint at {}", url);
@@ -92,6 +108,92 @@ impl ModelDetector {
         let futures = self.endpoints.iter().map(|ep| self.check_endpoint(ep));
         futures_util::future::join_all(futures).await
     }
+
+    /// Discover normalized `LocalModel` records for a single endpoint.
+    pub async fn discover_models(&self, endpoint: &ProbeEndpoint) -> Result<Vec<LocalModel>, DiscoveryError> {
+        let port = endpoint.port();
+        match endpoint.provider {
+            ProviderType::Ollama => {
+                ollama::list_models(&self.client, &endpoint.base_url).await
+            }
+            ProviderType::LlamaCpp => {
+                openai_compat::list_models_with_llama_fallback(
+                    &self.client,
+                    &endpoint.base_url,
+                    endpoint.provider.clone(),
+                    port,
+                ).await
+            }
+            _ => {
+                openai_compat::list_models(
+                    &self.client,
+                    &endpoint.base_url,
+                    endpoint.provider.clone(),
+                    port,
+                ).await
+            }
+        }
+    }
+
+    /// Discover models across all configured endpoints concurrently.
+    /// Returns a flat list of all discovered online `LocalModel` records.
+    pub async fn discover_all_models(&self) -> Vec<LocalModel> {
+        let futures = self.endpoints.iter().map(|ep| async move {
+            self.discover_models(ep).await.unwrap_or_default()
+        });
+        futures_util::future::join_all(futures)
+            .await
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+
+    /// Run a background polling loop that periodically scans endpoints and broadcasts
+    /// `Connected` and `Disconnected` events to `event_tx`.
+    pub async fn run_discovery_loop(
+        &self,
+        event_tx: tokio::sync::broadcast::Sender<ModelStatusEvent>,
+        cancel: CancellationToken,
+        poll_interval: Duration,
+    ) {
+        use std::collections::HashMap;
+        let mut online_states: HashMap<ProviderType, bool> = HashMap::new();
+
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    debug!("Model discovery loop cancelled");
+                    break;
+                }
+                _ = tokio::time::sleep(poll_interval) => {
+                    for endpoint in &self.endpoints {
+                        let models_res = self.discover_models(endpoint).await;
+                        let was_online = online_states.get(&endpoint.provider).copied().unwrap_or(false);
+
+                        match models_res {
+                            Ok(models) => {
+                                if !was_online || !models.is_empty() {
+                                    online_states.insert(endpoint.provider.clone(), true);
+                                    let _ = event_tx.send(ModelStatusEvent::Connected {
+                                        provider: endpoint.provider.clone(),
+                                        models,
+                                    });
+                                }
+                            }
+                            Err(_) => {
+                                if was_online {
+                                    online_states.insert(endpoint.provider.clone(), false);
+                                    let _ = event_tx.send(ModelStatusEvent::Disconnected {
+                                        provider: endpoint.provider.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -117,5 +219,50 @@ mod tests {
         let results = detector.scan_all().await;
         assert_eq!(results.len(), 1);
         assert!(!results[0].is_online);
+    }
+
+    #[test]
+    fn test_probe_endpoint_port_extraction() {
+        let ep = ProbeEndpoint::new(ProviderType::Ollama, "http://127.0.0.1:11434", "/api/tags");
+        assert_eq!(ep.port(), 11434);
+
+        let ep2 = ProbeEndpoint::new(ProviderType::RabbitMoe, "http://localhost:5000/", "/v1/models");
+        assert_eq!(ep2.port(), 5000);
+
+        let ep3 = ProbeEndpoint::new(ProviderType::LmStudio, "http://192.168.1.50", "/v1/models");
+        assert_eq!(ep3.port(), 1234); // fallback to ProviderType default
+    }
+
+    #[tokio::test]
+    async fn test_discover_models_offline_endpoint_fails_cleanly() {
+        let detector = ModelDetector::new(vec![ProbeEndpoint::new(
+            ProviderType::Ollama,
+            "http://127.0.0.1:65534",
+            "/api/tags",
+        )]);
+        let ep = &detector.endpoints()[0];
+        let result = detector.discover_models(ep).await;
+        assert!(result.is_err());
+
+        let all = detector.discover_all_models().await;
+        assert!(all.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_discovery_loop_cancels_cleanly() {
+        let detector = ModelDetector::new(vec![]);
+        let (tx, _rx) = ride_core::new_event_bus();
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        let handle = tokio::spawn(async move {
+            detector.run_discovery_loop(tx, cancel_clone, Duration::from_millis(50)).await;
+        });
+
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_millis(500), handle)
+            .await
+            .expect("should terminate on cancellation")
+            .expect("task should not panic");
     }
 }

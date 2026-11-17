@@ -9,6 +9,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::error::DiscoveryError;
+use crate::providers::openai_compat::is_moe_model_name;
 
 /// List models from an Ollama instance at `base_url`.
 pub async fn list_models(client: &Client, base_url: &str) -> Result<Vec<LocalModel>, DiscoveryError> {
@@ -37,11 +38,7 @@ pub async fn list_models(client: &Client, base_url: &str) -> Result<Vec<LocalMod
             arr.iter()
                 .filter_map(|m| {
                     let name = m.get("name").and_then(Value::as_str)?;
-                    // Ollama model names can be like "qwen2.5-coder:7b"
-                    // Check heuristically if it looks like a MoE model
-                    let is_moe = name.to_lowercase().contains("moe")
-                        || name.to_lowercase().contains("mixtral")
-                        || name.to_lowercase().contains("deepseek-v");
+                    let is_moe = is_moe_model_name(name);
                     Some(LocalModel {
                         id: name.to_owned(),
                         name: name.to_owned(),

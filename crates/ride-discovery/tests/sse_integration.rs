@@ -401,3 +401,153 @@ async fn test_openai_compat_list_models_integration() {
     assert_eq!(models[1].id, "deepseek-v3-moe");
     assert!(models[1].is_moe, "deepseek-v3 should be MoE");
 }
+
+#[tokio::test]
+async fn test_stream_sse_to_event_bus() {
+    use ride_core::ModelStatusEvent;
+    use ride_discovery::stream_sse_to_event_bus;
+
+    let body = openai_body(&["Hello", " from", " EventBus!"]);
+    let router = Router::new().route(
+        "/v1/chat/completions",
+        post(move || {
+            let body = body.clone();
+            async move {
+                axum::response::Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(axum::body::Body::from(body))
+                    .unwrap()
+            }
+        }),
+    );
+
+    let addr = start_test_server(router).await;
+    let client = Client::new();
+    let (event_tx, mut event_rx) = ride_core::new_event_bus();
+    let cancel = CancellationToken::new();
+
+    let req = client.post(format!("http://{addr}/v1/chat/completions"));
+    tokio::spawn(async move {
+        stream_sse_to_event_bus(&client, req, SseFormat::OpenAi, event_tx, cancel)
+            .await
+            .expect("stream_sse_to_event_bus should succeed");
+    });
+
+    let mut tokens = vec![];
+    let mut complete = false;
+
+    while let Ok(event) = tokio::time::timeout(std::time::Duration::from_secs(2), event_rx.recv()).await {
+        match event.unwrap() {
+            ModelStatusEvent::TokenGenerated { token } => tokens.push(token),
+            ModelStatusEvent::GenerationComplete => {
+                complete = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(complete, "should have received GenerationComplete");
+    assert_eq!(tokens.join(""), "Hello from EventBus!");
+}
+
+#[tokio::test]
+async fn test_llama_props_fallback_integration() {
+    use ride_core::ProviderType;
+    use ride_discovery::providers::openai_compat::list_models_with_llama_fallback;
+
+    // Simulate llama.cpp /props endpoint returning GGUF model info
+    let props_body = r#"{
+        "model_path": "models/mistral-7b-instruct-v0.3.Q4_K_M.gguf",
+        "default_generation_settings": {
+            "n_ctx": 32768
+        }
+    }"#;
+
+    let router = Router::new().route(
+        "/props",
+        axum::routing::get(move || {
+            let body = props_body.to_string();
+            async move {
+                axum::response::Response::builder()
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body))
+                    .unwrap()
+            }
+        }),
+    );
+
+    let addr = start_test_server(router).await;
+    let client = Client::new();
+    let models = list_models_with_llama_fallback(
+        &client,
+        &format!("http://{addr}"),
+        ProviderType::LlamaCpp,
+        addr.port(),
+    )
+    .await
+    .expect("should fallback to /props and succeed");
+
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].id, "mistral-7b-instruct-v0.3.Q4_K_M.gguf");
+    assert_eq!(models[0].context_length, Some(32768));
+    assert_eq!(models[0].provider, ProviderType::LlamaCpp);
+    assert_eq!(models[0].port, addr.port());
+}
+
+#[tokio::test]
+async fn test_discovery_loop_integration() {
+    use ride_core::{ModelStatusEvent, ProviderType};
+    use ride_discovery::{ModelDetector, ProbeEndpoint};
+    use std::time::Duration;
+
+    let body = r#"{
+        "models": [{"name": "qwen2.5-coder:7b"}]
+    }"#;
+
+    let router = Router::new().route(
+        "/api/tags",
+        axum::routing::get(move || {
+            let body = body.to_string();
+            async move {
+                axum::response::Response::builder()
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body))
+                    .unwrap()
+            }
+        }),
+    );
+
+    let addr = start_test_server(router).await;
+    let detector = ModelDetector::new(vec![ProbeEndpoint::new(
+        ProviderType::Ollama,
+        format!("http://{addr}"),
+        "/api/tags",
+    )]);
+
+    let (event_tx, mut event_rx) = ride_core::new_event_bus();
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+
+    tokio::spawn(async move {
+        detector
+            .run_discovery_loop(event_tx, cancel_clone, Duration::from_millis(50))
+            .await;
+    });
+
+    let ev = tokio::time::timeout(Duration::from_secs(2), event_rx.recv())
+        .await
+        .expect("should receive event within 2s")
+        .expect("channel ok");
+
+    match ev {
+        ModelStatusEvent::Connected { provider, models } => {
+            assert_eq!(provider, ProviderType::Ollama);
+            assert_eq!(models.len(), 1);
+            assert_eq!(models[0].id, "qwen2.5-coder:7b");
+        }
+        _ => panic!("expected Connected event"),
+    }
+
+    cancel.cancel();
+}
