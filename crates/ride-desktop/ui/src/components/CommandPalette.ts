@@ -17,13 +17,22 @@ export class CommandPalette {
   private selectedIndex: number = 0;
   private onSelectLayout: (layout: UiLayout) => void;
   private onPromptAgent: (prompt: string) => void;
+  private onOpenFile?: () => void;
+  private onSaveFile?: () => void;
+  private onNewFile?: () => void;
 
   constructor(
     onSelectLayout: (layout: UiLayout) => void,
-    onPromptAgent: (prompt: string) => void
+    onPromptAgent: (prompt: string) => void,
+    onOpenFile?: () => void,
+    onSaveFile?: () => void,
+    onNewFile?: () => void
   ) {
     this.onSelectLayout = onSelectLayout;
     this.onPromptAgent = onPromptAgent;
+    this.onOpenFile = onOpenFile;
+    this.onSaveFile = onSaveFile;
+    this.onNewFile = onNewFile;
 
     this.overlay = document.createElement('div');
     this.overlay.className = 'command-palette-overlay';
@@ -72,6 +81,36 @@ export class CommandPalette {
 
   private initDefaultItems(): void {
     this.items = [
+      {
+        id: 'file-save',
+        label: 'File: Save Active File (Ctrl+S)',
+        sublabel: 'Persist current CodeMirror buffer directly to disk via Rust IPC',
+        icon: '💾',
+        action: () => {
+          this.close();
+          this.onSaveFile?.();
+        },
+      },
+      {
+        id: 'file-open',
+        label: 'File: Open File by Path (Ctrl+O)',
+        sublabel: 'Load source file from disk into editor',
+        icon: '📂',
+        action: () => {
+          this.close();
+          this.onOpenFile?.();
+        },
+      },
+      {
+        id: 'file-new',
+        label: 'File: New File Buffer (Ctrl+N)',
+        sublabel: 'Create a new scratch buffer for manual editing',
+        icon: '✚',
+        action: () => {
+          this.close();
+          this.onNewFile?.();
+        },
+      },
       {
         id: 'layout-vscode',
         label: 'Switch Layout: VS Code',

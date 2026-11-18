@@ -35,6 +35,22 @@ export class ClaudeCodeLayout {
   public update(state: AppState): void {
     this.diffViewer.render(state.diffs);
     this.renderTerminalStream(state.messages, state);
+    this.updateStatusPill(state);
+  }
+
+  private updateStatusPill(state: AppState): void {
+    const pill = this.element.querySelector<HTMLElement>('.terminal-status-pill');
+    const txt = this.element.querySelector<HTMLElement>('.status-txt');
+    if (!pill || !txt) return;
+
+    const isOnline = state.providers.some((p) => p.is_online);
+    pill.classList.toggle('offline', !isOnline);
+    pill.classList.toggle('online', isOnline);
+    if (isOnline) {
+      txt.innerText = `${state.currentProvider} online`;
+    } else {
+      txt.innerText = 'offline mode';
+    }
   }
 
   public setBusy(busy: boolean): void {
@@ -62,9 +78,9 @@ export class ClaudeCodeLayout {
             <span class="term-icon">❯_</span>
             <span>claude-code session — R.I.D.E Autonomous Agent (Terminal-First)</span>
           </div>
-          <div class="terminal-status-pill">
+          <div class="terminal-status-pill offline">
             <span class="pulse-dot"></span>
-            <span class="status-txt">local-moe online</span>
+            <span class="status-txt">offline mode</span>
           </div>
         </div>
 

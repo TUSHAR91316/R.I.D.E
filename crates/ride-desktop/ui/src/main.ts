@@ -21,7 +21,7 @@ class RideApplication {
     skills: [],
     diffs: [],
     messages: [],
-    currentModel: 'qwen2.5-coder:7b',
+    currentModel: '',
     currentProvider: 'Offline',
     tokensPerSec: 0,
     ramUsageMb: 42, // Target native WebView2 footprint (<60MB)
@@ -74,7 +74,10 @@ class RideApplication {
 
     this.commandPalette = new CommandPalette(
       (layout) => this.switchLayout(layout),
-      (prompt) => this.handleSendMessage(prompt)
+      (prompt) => this.handleSendMessage(prompt),
+      () => this.promptOpenFile(),
+      () => void this.editor.saveActiveFile(),
+      () => this.editor.createNewFile()
     );
 
     // 2. Initialize layouts
@@ -139,8 +142,12 @@ class RideApplication {
       if (onlineProvider && onlineProvider.models.length > 0) {
         this.state.currentProvider = onlineProvider.provider;
         this.state.currentModel = onlineProvider.models[0].name || onlineProvider.models[0].id;
+      } else if (onlineProvider) {
+        this.state.currentProvider = onlineProvider.provider;
+        this.state.currentModel = '';
       } else {
-        this.state.currentProvider = onlineProvider ? onlineProvider.provider : 'Offline';
+        this.state.currentProvider = 'Offline';
+        this.state.currentModel = '';
       }
 
       this.updateAllComponents();
@@ -160,11 +167,15 @@ class RideApplication {
         const modelStillAvailable = onlineProvider.models.some(
           (m) => m.name === this.state.currentModel || m.id === this.state.currentModel
         );
-        if (!modelStillAvailable) {
+        if (!modelStillAvailable || !this.state.currentModel) {
           this.state.currentModel = onlineProvider.models[0].name || onlineProvider.models[0].id;
         }
-      } else if (!onlineProvider) {
+      } else if (onlineProvider) {
+        this.state.currentProvider = onlineProvider.provider;
+        this.state.currentModel = '';
+      } else {
         this.state.currentProvider = 'Offline';
+        this.state.currentModel = '';
       }
 
       this.updateAllComponents();
@@ -298,6 +309,12 @@ class RideApplication {
       if (isCmdOrCtrl && e.key.toLowerCase() === 's') {
         e.preventDefault();
         void this.editor.saveActiveFile();
+      } else if (isCmdOrCtrl && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        this.promptOpenFile();
+      } else if (isCmdOrCtrl && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        this.editor.createNewFile();
       } else if (isCmdOrCtrl && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         this.commandPalette.toggle();
@@ -312,6 +329,13 @@ class RideApplication {
         this.switchLayout('codex');
       }
     });
+  }
+
+  private promptOpenFile(): void {
+    const path = window.prompt('Enter file path to open (e.g. crates/ride-desktop/Cargo.toml):');
+    if (path && path.trim()) {
+      void this.editor.openFile(path.trim());
+    }
   }
 
   private showSaveToast(path: string): void {

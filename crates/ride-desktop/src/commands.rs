@@ -213,11 +213,19 @@ pub async fn send_agent_message(
 
     let detector = ModelDetector::default();
     let statuses = detector.scan_all().await;
-    let online_provider = statuses.into_iter().find(|s| s.is_online);
-
-    let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);
+    let all_models = detector.discover_all_models().await;
 
     let chosen_model = model_name.unwrap_or_else(|| "local-model".into());
+
+    // Try matching the provider that actually hosts chosen_model, or fallback to first online provider
+    let online_provider = all_models
+        .iter()
+        .find(|m| m.name == chosen_model || m.id == chosen_model)
+        .and_then(|m| statuses.iter().find(|s| s.is_online && s.provider == m.provider))
+        .cloned()
+        .or_else(|| statuses.into_iter().find(|s| s.is_online));
+
+    let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);
 
     let llm: Arc<dyn LlmClient> = if let Some(provider_status) = online_provider {
         Arc::new(
@@ -230,12 +238,11 @@ pub async fn send_agent_message(
             .with_streaming(true),
         )
     } else {
-        Arc::new(MockLlmClient::new_with_handler(move |msgs| {
-            format!(
-                "R.I.D.E agent received {} messages. Processing: {}",
-                msgs.len(),
-                msgs.last().map(|m| m.content.as_str()).unwrap_or("")
-            )
+        Arc::new(MockLlmClient::new_with_handler(move |_msgs| {
+            "R.I.D.E is in Offline Mode: no local model detected on localhost ports (11434, 1234, 5000, 8080, 8000).\n\n\
+             You can use R.I.D.E as a standalone code editor (edit, Ctrl+S to save, Ctrl+O to open).\n\
+             To activate AI capabilities, start Ollama (`ollama serve`) or LM Studio — R.I.D.E will auto-connect dynamically."
+                .to_string()
         }))
     };
 
@@ -394,20 +401,22 @@ pub fn get_moe_status(state: State<Mutex<DesktopState>>) -> Result<MoeEngineStat
 /// Save file content to disk. Creates parent directories if necessary.
 #[tauri::command]
 pub async fn save_file(path: String, content: String) -> Result<String, String> {
-    let p = std::path::Path::new(&path);
+    let clean_path = path.trim().trim_matches('"').trim_matches('\'');
+    let p = std::path::Path::new(clean_path);
     if let Some(parent) = p.parent() {
         if !parent.as_os_str().is_empty() {
             let _ = std::fs::create_dir_all(parent);
         }
     }
-    std::fs::write(&path, &content).map_err(|e| format!("Failed to save '{}': {}", path, e))?;
-    Ok(format!("Saved {}", path))
+    std::fs::write(clean_path, &content).map_err(|e| format!("Failed to save '{}': {}", clean_path, e))?;
+    Ok(format!("Saved {}", clean_path))
 }
 
 /// Read file content from disk.
 #[tauri::command]
 pub async fn read_file(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read '{}': {}", path, e))
+    let clean_path = path.trim().trim_matches('"').trim_matches('\'');
+    std::fs::read_to_string(clean_path).map_err(|e| format!("Failed to read '{}': {}", clean_path, e))
 }
 
 // ─── Unit tests ───────────────────────────────────────────────────────────────
@@ -742,10 +751,12 @@ pub mod tests {
         let path_str = file_path.to_string_lossy().to_string();
 
         let code = "fn main() {\n    println!(\"Hello R.I.D.E\");\n}\n";
-        let save_res = save_file(path_str.clone(), code.to_string()).await;
+        // Test padded/quoted path
+        let padded_path = format!("  \"{}\"  ", path_str);
+        let save_res = save_file(padded_path.clone(), code.to_string()).await;
         assert!(save_res.is_ok());
 
-        let read_res = read_file(path_str.clone()).await;
+        let read_res = read_file(padded_path).await;
         assert!(read_res.is_ok());
         assert_eq!(read_res.unwrap(), code);
 

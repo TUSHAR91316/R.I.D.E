@@ -16,10 +16,11 @@ export class StatusBar {
 
   public render(state: AppState): void {
     const activeProvider = state.providers.find((p) => p.is_online);
+    const isOnline = !!activeProvider;
     const providerName = activeProvider ? activeProvider.provider : 'Offline';
     const latency = activeProvider?.latency_ms ? `${activeProvider.latency_ms}ms` : '';
-    const model = state.currentModel || 'qwen2.5-coder:7b';
-    const tokRate = state.tokensPerSec > 0 ? `${state.tokensPerSec.toFixed(1)} tok/s` : 'Idle';
+    const model = isOnline ? (state.currentModel || 'Ready') : 'No Model Detected';
+    const tokRate = (isOnline && state.tokensPerSec > 0) ? `${state.tokensPerSec.toFixed(1)} tok/s` : 'Idle';
     const ram = `${state.ramUsageMb} MB (WebView2)`;
 
     this.element.innerHTML = `
@@ -28,12 +29,12 @@ export class StatusBar {
           <span class="icon">⚡</span>
           <span class="label">R.I.D.E</span>
         </div>
-        <div class="status-item provider-badge ${activeProvider ? 'online' : 'offline'}" title="${providerName} ${latency}">
+        <div class="status-item provider-badge ${isOnline ? 'online' : 'offline'}" title="${providerName} ${latency}">
           <span class="status-dot"></span>
           <span class="text">${providerName} ${latency ? `(${latency})` : ''}</span>
         </div>
-        <div class="status-item model-badge" title="Active LLM">
-          <span class="icon">🧠</span>
+        <div class="status-item model-badge ${isOnline ? 'online' : 'offline'}" title="${isOnline ? `Active LLM: ${model}` : 'No local LLM active (Standalone Editor Mode)'}">
+          <span class="icon">${isOnline ? '🧠' : '💤'}</span>
           <span class="text">${model}</span>
         </div>
         <div class="status-item tokens-badge" title="Inference Throughput">

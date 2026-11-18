@@ -44,6 +44,11 @@ export class CodexLayout {
 
   public update(state: AppState): void {
     this.chat.updateMessages(state.messages);
+    const docEl = this.element.querySelector<HTMLElement>('.hud-doc');
+    if (docEl) {
+      const activeTab = this.editor.getActiveTab();
+      docEl.innerText = activeTab ? activeTab.name : 'Editor';
+    }
   }
 
   private renderSkeleton(): void {

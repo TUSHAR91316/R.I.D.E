@@ -108,6 +108,7 @@ export class EditorComponent {
   private editorContainer: HTMLElement | null = null;
   private filePickerInput: HTMLInputElement | null = null;
   private onSaveCallback?: (path: string) => void;
+  private isProgrammaticUpdate: boolean = false;
 
   constructor(onSave?: (path: string) => void) {
     this.onSaveCallback = onSave;
@@ -121,16 +122,24 @@ export class EditorComponent {
     return this.element;
   }
 
-  public setContent(content: string): void {
-    if (this.editorView) {
+  private setEditorContent(content: string): void {
+    if (!this.editorView) return;
+    this.isProgrammaticUpdate = true;
+    try {
       this.editorView.dispatch({
         changes: { from: 0, to: this.editorView.state.doc.length, insert: content },
       });
-      if (this.tabs[this.activeTabIndex]) {
-        this.tabs[this.activeTabIndex].content = content;
-        this.tabs[this.activeTabIndex].isModified = false;
-        this.renderTabs();
-      }
+    } finally {
+      this.isProgrammaticUpdate = false;
+    }
+  }
+
+  public setContent(content: string): void {
+    this.setEditorContent(content);
+    if (this.tabs[this.activeTabIndex]) {
+      this.tabs[this.activeTabIndex].content = content;
+      this.tabs[this.activeTabIndex].isModified = false;
+      this.renderTabs();
     }
   }
 
@@ -142,9 +151,30 @@ export class EditorComponent {
     return this.tabs[this.activeTabIndex] || null;
   }
 
+  public createNewFile(name?: string, path?: string): void {
+    const num = this.tabs.filter((t) => t.name.startsWith('untitled')).length + 1;
+    const fileName = name || `untitled-${num}.rs`;
+    const filePath = path || fileName;
+    const newTab: EditorTab = {
+      name: fileName,
+      path: filePath,
+      content: '// New buffer — edit code and press Ctrl+S to save\n',
+      isModified: false,
+    };
+    this.tabs.push(newTab);
+    this.switchTab(this.tabs.length - 1);
+  }
+
   public async saveActiveFile(): Promise<boolean> {
     const activeTab = this.tabs[this.activeTabIndex];
     if (!activeTab) return false;
+
+    if (activeTab.path.startsWith('untitled')) {
+      const userPath = window.prompt('Save file as (enter path):', activeTab.path);
+      if (!userPath || !userPath.trim()) return false;
+      activeTab.path = userPath.trim();
+      activeTab.name = activeTab.path.split(/[\/\\]/).pop() || activeTab.path;
+    }
 
     const contentToSave = this.getContent();
     activeTab.content = contentToSave;
@@ -202,9 +232,9 @@ export class EditorComponent {
         if (diskContent) {
           tab.content = diskContent;
           if (i === this.activeTabIndex && this.editorView) {
-            this.editorView.dispatch({
-              changes: { from: 0, to: this.editorView.state.doc.length, insert: diskContent },
-            });
+            this.setEditorContent(diskContent);
+            tab.isModified = false;
+            this.renderTabs();
           }
         }
       } catch {
@@ -218,13 +248,21 @@ export class EditorComponent {
       <div class="editor-tab-bar">
         <div class="editor-tabs-scroll"></div>
         <div class="editor-tab-actions">
+          <button class="editor-action-btn btn-new" title="New File (Ctrl+N)">
+            <span class="btn-icon">✚</span>
+            <span class="btn-text">New</span>
+          </button>
           <button class="editor-action-btn btn-save" title="Save File (Ctrl+S)">
             <span class="btn-icon">💾</span>
             <span class="btn-text">Save</span>
           </button>
-          <button class="editor-action-btn btn-open" title="Open File from disk">
+          <button class="editor-action-btn btn-open" title="Open File (Ctrl+O)">
             <span class="btn-icon">📂</span>
             <span class="btn-text">Open</span>
+          </button>
+          <button class="editor-action-btn btn-open-path" title="Open from Path...">
+            <span class="btn-icon">📁</span>
+            <span class="btn-text">Path</span>
           </button>
           <input type="file" class="editor-file-picker" style="display: none;" />
         </div>
@@ -280,10 +318,8 @@ export class EditorComponent {
     this.renderTabs();
 
     const currentTab = this.tabs[index];
-    if (this.editorView && currentTab) {
-      this.editorView.dispatch({
-        changes: { from: 0, to: this.editorView.state.doc.length, insert: currentTab.content },
-      });
+    if (currentTab) {
+      this.setEditorContent(currentTab.content);
     }
   }
 
@@ -321,7 +357,7 @@ export class EditorComponent {
         rust(),
         oneDark,
         EditorView.updateListener.of((update) => {
-          if (update.docChanged && this.tabs[this.activeTabIndex]) {
+          if (!this.isProgrammaticUpdate && update.docChanged && this.tabs[this.activeTabIndex]) {
             const currentTab = this.tabs[this.activeTabIndex];
             currentTab.content = update.state.doc.toString();
             if (!currentTab.isModified) {
@@ -340,6 +376,13 @@ export class EditorComponent {
   }
 
   private attachActionEvents(): void {
+    const newBtn = this.element.querySelector<HTMLButtonElement>('.btn-new');
+    if (newBtn) {
+      newBtn.addEventListener('click', () => {
+        this.createNewFile();
+      });
+    }
+
     const saveBtn = this.element.querySelector<HTMLButtonElement>('.btn-save');
     if (saveBtn) {
       saveBtn.addEventListener('click', () => {
@@ -361,10 +404,21 @@ export class EditorComponent {
         const reader = new FileReader();
         reader.onload = (event) => {
           const content = (event.target?.result as string) || '';
-          void this.openFile(file.name, content);
+          const filePath = (file as any).path || file.name;
+          void this.openFile(filePath, content);
           input.value = '';
         };
         reader.readAsText(file);
+      });
+    }
+
+    const openPathBtn = this.element.querySelector<HTMLButtonElement>('.btn-open-path');
+    if (openPathBtn) {
+      openPathBtn.addEventListener('click', () => {
+        const path = window.prompt('Enter file path to open (e.g. crates/ride-desktop/Cargo.toml):');
+        if (path && path.trim()) {
+          void this.openFile(path.trim());
+        }
       });
     }
   }

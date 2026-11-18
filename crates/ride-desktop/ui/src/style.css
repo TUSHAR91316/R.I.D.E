@@ -450,6 +450,17 @@ html, body {
   border: 1px solid rgba(39, 201, 63, 0.3);
 }
 
+.terminal-status-pill.offline {
+  background-color: rgba(235, 87, 87, 0.15);
+  color: #eb5757;
+  border-color: rgba(235, 87, 87, 0.3);
+}
+
+.terminal-status-pill.offline .pulse-dot {
+  background-color: #eb5757;
+  animation: none;
+}
+
 .pulse-dot {
   width: 6px;
   height: 6px;
