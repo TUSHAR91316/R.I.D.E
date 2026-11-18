@@ -8,7 +8,7 @@ use ride_discovery::ModelDetector;
 use ride_moe::{MoeEngineConfig, MoeEngineManager, MoeEngineStatus};
 use ride_skills::SkillRegistry;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::State;
 
 // ─── Shared application state ────────────────────────────────────────────────
@@ -41,6 +41,15 @@ pub struct SkillInfo {
     pub enabled: bool,
 }
 
+/// A staged diff proposal ready for UI review, apply, or rollback.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StagedDiff {
+    pub path: String,
+    pub original_content: String,
+    pub proposed_content: String,
+    pub diff: UnifiedDiff,
+}
+
 /// Payload returned by `get_diff_preview`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffPayload {
@@ -54,8 +63,8 @@ pub struct DiffPayload {
 pub struct DesktopState {
     pub active_layout: UiLayout,
     pub enabled_skills: Vec<String>,
-    pub pending_diffs: Vec<UnifiedDiff>,
-    pub diff_manager: DiffManager,
+    pub pending_diffs: Vec<StagedDiff>,
+    pub diff_manager: Arc<DiffManager>,
     pub moe_manager: MoeEngineManager,
 }
 
@@ -65,8 +74,62 @@ impl Default for DesktopState {
             active_layout: UiLayout::default(),
             enabled_skills: Vec::new(),
             pending_diffs: Vec::new(),
-            diff_manager: DiffManager::new(3),
+            diff_manager: Arc::new(DiffManager::new(3)),
             moe_manager: MoeEngineManager::new(MoeEngineConfig::default()),
+        }
+    }
+}
+
+impl DesktopState {
+    pub fn stage_diff(&mut self, path: &str, original: &str, modified: &str) -> DiffPayload {
+        let diff = DiffEngine::create_diff(path, original, modified, 3);
+        let payload = DiffPayload {
+            path: diff.path.to_string_lossy().to_string(),
+            diff_text: diff.diff_text.clone(),
+            additions: diff.additions,
+            deletions: diff.deletions,
+        };
+        self.pending_diffs.retain(|d| d.path != path);
+        self.pending_diffs.push(StagedDiff {
+            path: path.to_string(),
+            original_content: original.to_string(),
+            proposed_content: modified.to_string(),
+            diff,
+        });
+        payload
+    }
+
+    pub fn apply_diff_path(&mut self, path: &str) -> Result<(), String> {
+        let pos = self
+            .pending_diffs
+            .iter()
+            .position(|d| d.path == path || d.diff.path.to_string_lossy() == path)
+            .ok_or_else(|| format!("No staged diff found for path '{}'", path))?;
+
+        let staged = self.pending_diffs.remove(pos);
+        self.diff_manager
+            .apply_write_with_backup(&staged.path, &staged.proposed_content)
+            .map_err(|e| format!("Failed to apply diff for '{}': {}", staged.path, e))?;
+        Ok(())
+    }
+
+    pub fn rollback_diff_path(&mut self, path: &str) -> Result<String, String> {
+        let was_pending = self
+            .pending_diffs
+            .iter()
+            .any(|d| d.path == path || d.diff.path.to_string_lossy() == path);
+        self.pending_diffs
+            .retain(|d| d.path != path && d.diff.path.to_string_lossy() != path);
+
+        match self.diff_manager.rollback_latest_for_path(path) {
+            Ok(snap) => Ok(format!("Rolled back {} (restored snapshot #{})", path, snap.id)),
+            Err(e) => {
+                if was_pending {
+                    Ok(format!("Discarded staged changes for {}", path))
+                } else {
+                    Err(format!("Rollback failed for {}: {}", path, e))
+                }
+            }
         }
     }
 }
@@ -83,13 +146,13 @@ pub async fn get_model_status() -> Result<Vec<ProviderStatus>, String> {
     let mut result: Vec<ProviderStatus> = statuses
         .iter()
         .map(|s| ProviderStatus {
-            provider: format!("{:?}", s.provider),
+            provider: s.provider.display_name().to_string(),
             base_url: s.endpoint.clone(),
             is_online: s.is_online,
             latency_ms: s.latency_ms,
             models: models
                 .iter()
-                .filter(|m| format!("{:?}", m.provider) == format!("{:?}", s.provider))
+                .filter(|m| m.provider == s.provider)
                 .map(|m| ModelSummary {
                     id: m.id.clone(),
                     name: m.name.clone(),
@@ -109,31 +172,84 @@ pub async fn get_model_status() -> Result<Vec<ProviderStatus>, String> {
 #[tauri::command]
 pub async fn send_agent_message(
     app: tauri::AppHandle,
+    state: State<'_, Mutex<DesktopState>>,
     message: String,
     model_name: Option<String>,
 ) -> Result<String, String> {
-    use ride_agent::MockLlmClient;
+    use ride_agent::{HttpLlmClient, LlmClient, MockLlmClient};
     use std::sync::Arc;
     use tauri::Emitter;
 
-    let model = model_name.unwrap_or_else(|| "local-model".into());
+    let (enabled_skills, diff_manager) = {
+        let st = state.lock().map_err(|e| e.to_string())?;
+        (st.enabled_skills.clone(), Arc::clone(&st.diff_manager))
+    };
+
+    let ride_config = ride_core::RideConfig::default();
+    let mut registry = SkillRegistry::new();
+    let _ = registry.load_from_dir(&ride_config.skills_dir);
+    let active_manifests: Vec<_> = registry
+        .list()
+        .into_iter()
+        .filter(|s| enabled_skills.contains(&s.metadata.name))
+        .cloned()
+        .collect();
+
+    let mut dyn_tools = ride_skills::DynamicToolRegistry::new();
+    for s in &active_manifests {
+        let base_dir = s
+            .base_dir
+            .clone()
+            .or_else(|| {
+                s.source_path
+                    .as_ref()
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        for t in &s.tools {
+            dyn_tools.register(ride_skills::DynamicSkillTool::new(t.clone(), &base_dir));
+        }
+    }
+
+    let detector = ModelDetector::default();
+    let statuses = detector.scan_all().await;
+    let online_provider = statuses.into_iter().find(|s| s.is_online);
+
+    let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);
+
+    let chosen_model = model_name.unwrap_or_else(|| "local-model".into());
+
+    let llm: Arc<dyn LlmClient> = if let Some(provider_status) = online_provider {
+        Arc::new(
+            HttpLlmClient::new(
+                &provider_status.endpoint,
+                provider_status.provider,
+                &chosen_model,
+            )
+            .with_event_sender(event_tx.clone())
+            .with_streaming(true),
+        )
+    } else {
+        Arc::new(MockLlmClient::new_with_handler(move |msgs| {
+            format!(
+                "R.I.D.E agent received {} messages. Processing: {}",
+                msgs.len(),
+                msgs.last().map(|m| m.content.as_str()).unwrap_or("")
+            )
+        }))
+    };
+
     let config = AgentSessionConfig {
-        model_name: model,
+        model_name: chosen_model,
         max_turns: 5,
         ..Default::default()
     };
 
-    // Use a mock client for the IPC path; real HTTP client is wired via provider discovery.
-    let llm = Arc::new(MockLlmClient::new_with_handler(move |msgs| {
-        format!(
-            "R.I.D.E agent received {} messages. Processing: {}",
-            msgs.len(),
-            msgs.last().map(|m| m.content.as_str()).unwrap_or("")
-        )
-    }));
-
-    let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(64);
-    let mut session = AgentSession::new(config, llm).with_event_sender(event_tx);
+    let mut session = AgentSession::new(config, llm)
+        .with_skills(active_manifests)
+        .with_dynamic_tools(dyn_tools)
+        .with_diff_manager(diff_manager)
+        .with_event_sender(event_tx);
 
     let app_clone = app.clone();
     let event_listener = tokio::spawn(async move {
@@ -200,10 +316,10 @@ pub fn get_diff_preview(state: State<Mutex<DesktopState>>) -> Result<Vec<DiffPay
         .pending_diffs
         .iter()
         .map(|d| DiffPayload {
-            path: d.path.to_string_lossy().to_string(),
-            diff_text: d.diff_text.clone(),
-            additions: d.additions,
-            deletions: d.deletions,
+            path: d.path.clone(),
+            diff_text: d.diff.diff_text.clone(),
+            additions: d.diff.additions,
+            deletions: d.diff.deletions,
         })
         .collect();
     Ok(payloads)
@@ -218,34 +334,21 @@ pub fn stage_diff_preview(
     state: State<Mutex<DesktopState>>,
 ) -> Result<DiffPayload, String> {
     let mut st = state.lock().map_err(|e| e.to_string())?;
-    let diff = DiffEngine::create_diff(&path, &original, &modified, 3);
-    let payload = DiffPayload {
-        path: diff.path.to_string_lossy().to_string(),
-        diff_text: diff.diff_text.clone(),
-        additions: diff.additions,
-        deletions: diff.deletions,
-    };
-    st.pending_diffs.push(diff);
-    Ok(payload)
+    Ok(st.stage_diff(&path, &original, &modified))
 }
 
-/// Apply a pending diff by file path (removes it from the pending queue).
+/// Apply a pending diff by file path (writes changes to disk and records backup snapshot).
 #[tauri::command]
 pub fn apply_diff(path: String, state: State<Mutex<DesktopState>>) -> Result<(), String> {
     let mut st = state.lock().map_err(|e| e.to_string())?;
-    st.pending_diffs.retain(|d| d.path.to_string_lossy() != path);
-    Ok(())
+    st.apply_diff_path(&path)
 }
 
 /// Rollback a diff by file path, removing it from pending and attempting snapshot restoration.
 #[tauri::command]
 pub fn rollback_diff(path: String, state: State<Mutex<DesktopState>>) -> Result<String, String> {
     let mut st = state.lock().map_err(|e| e.to_string())?;
-    st.pending_diffs.retain(|d| d.path.to_string_lossy() != path);
-    match st.diff_manager.rollback_latest_for_path(&path) {
-        Ok(snap) => Ok(format!("Rolled back {} (snapshot #{})", path, snap.id)),
-        Err(_) => Ok(format!("Removed pending diff for {}", path)),
-    }
+    st.rollback_diff_path(&path)
 }
 
 /// Read the currently active UI layout setting.
@@ -391,28 +494,16 @@ pub mod tests {
         assert!(st.enabled_skills.is_empty());
     }
 
-    // ── Diff queue logic ──────────────────────────────────────────────────────
-
-    fn make_diff(path: &str) -> UnifiedDiff {
-        UnifiedDiff {
-            path: std::path::PathBuf::from(path),
-            original_header: format!("--- {path}"),
-            modified_header: format!("+++ {path}"),
-            hunks: vec![],
-            diff_text: format!("diff for {path}"),
-            additions: 1,
-            deletions: 0,
-        }
-    }
+    // ── Diff queue & disk application logic ───────────────────────────────────
 
     #[test]
     fn test_diff_payload_serialization() {
-        let d = make_diff("src/main.rs");
+        let diff = DiffEngine::create_diff("src/main.rs", "fn a() {}", "fn a() { b(); }", 3);
         let payload = DiffPayload {
-            path: d.path.to_string_lossy().to_string(),
-            diff_text: d.diff_text.clone(),
-            additions: d.additions,
-            deletions: d.deletions,
+            path: diff.path.to_string_lossy().to_string(),
+            diff_text: diff.diff_text.clone(),
+            additions: diff.additions,
+            deletions: diff.deletions,
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("src/main.rs"));
@@ -420,44 +511,110 @@ pub mod tests {
     }
 
     #[test]
-    fn test_apply_diff_removes_from_queue() {
+    fn test_stage_diff_stores_proposed_content() {
         let mut st = make_state();
-        st.pending_diffs.push(make_diff("src/main.rs"));
-        st.pending_diffs.push(make_diff("src/lib.rs"));
-
-        let path = "src/main.rs";
-        st.pending_diffs.retain(|d| d.path.to_string_lossy() != path);
-
+        let payload = st.stage_diff("test.rs", "fn old() {}", "fn new() {}");
+        assert_eq!(payload.path, "test.rs");
         assert_eq!(st.pending_diffs.len(), 1);
-        assert_eq!(
-            st.pending_diffs[0].path.to_string_lossy(),
-            "src/lib.rs"
-        );
+        assert_eq!(st.pending_diffs[0].proposed_content, "fn new() {}");
+        assert_eq!(st.pending_diffs[0].original_content, "fn old() {}");
     }
 
     #[test]
-    fn test_rollback_diff_removes_from_queue() {
+    fn test_apply_diff_writes_to_disk_and_creates_backup() {
         let mut st = make_state();
-        st.pending_diffs.push(make_diff("src/main.rs"));
-        let path = "src/main.rs";
-        st.pending_diffs.retain(|d| d.path.to_string_lossy() != path);
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ride_test_diff_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let file_path = temp_dir.join("test.txt");
+        let path_str = file_path.to_string_lossy().to_string();
+
+        let original = "Hello World\nLine 2";
+        std::fs::write(&file_path, original).unwrap();
+
+        let modified = "Hello World\nLine 2 Modified\nLine 3";
+        let payload = st.stage_diff(&path_str, original, modified);
+        assert_eq!(payload.additions, 2);
+        assert_eq!(st.pending_diffs.len(), 1);
+
+        // Apply the diff
+        let res = st.apply_diff_path(&path_str);
+        assert!(res.is_ok());
         assert!(st.pending_diffs.is_empty());
+
+        // Verify content on disk
+        let disk_content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(disk_content, modified);
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_rollback_diff_restores_original_file_content() {
+        let mut st = make_state();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ride_test_rollback_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let file_path = temp_dir.join("test_rollback.txt");
+        let path_str = file_path.to_string_lossy().to_string();
+
+        let original = "Original Line 1\nOriginal Line 2";
+        std::fs::write(&file_path, original).unwrap();
+
+        let modified = "Modified Line 1\nModified Line 2\nExtra";
+        st.stage_diff(&path_str, original, modified);
+
+        // Apply diff to disk
+        st.apply_diff_path(&path_str).unwrap();
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), modified);
+
+        // Now rollback
+        let rollback_res = st.rollback_diff_path(&path_str);
+        assert!(rollback_res.is_ok());
+        assert!(rollback_res.unwrap().contains("Rolled back"));
+
+        // Verify original content is restored on disk
+        let restored_content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(restored_content, original);
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_rollback_staged_diff_before_apply_discards_gracefully() {
+        let mut st = make_state();
+        st.stage_diff("fake_file.rs", "fn old() {}", "fn new() {}");
+        assert_eq!(st.pending_diffs.len(), 1);
+
+        let res = st.rollback_diff_path("fake_file.rs");
+        assert!(res.is_ok());
+        assert!(res.unwrap().contains("Discarded staged changes"));
+        assert!(st.pending_diffs.is_empty());
+    }
+
+    #[test]
+    fn test_apply_diff_nonexistent_returns_err() {
+        let mut st = make_state();
+        let res = st.apply_diff_path("missing.rs");
+        assert!(res.is_err());
     }
 
     #[test]
     fn test_get_diff_preview_empty() {
         let st = make_state();
-        let payloads: Vec<DiffPayload> = st
-            .pending_diffs
-            .iter()
-            .map(|d| DiffPayload {
-                path: d.path.to_string_lossy().to_string(),
-                diff_text: d.diff_text.clone(),
-                additions: d.additions,
-                deletions: d.deletions,
-            })
-            .collect();
-        assert!(payloads.is_empty());
+        assert!(st.pending_diffs.is_empty());
     }
 
     #[test]

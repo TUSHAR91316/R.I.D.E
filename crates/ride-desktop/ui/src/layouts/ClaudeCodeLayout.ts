@@ -24,6 +24,14 @@ export class ClaudeCodeLayout {
     return this.element;
   }
 
+  public mount(): void {
+    const drawerContent = this.element.querySelector<HTMLElement>('.drawer-content');
+    if (drawerContent && !drawerContent.contains(this.diffViewer.getElement())) {
+      drawerContent.innerHTML = '';
+      drawerContent.appendChild(this.diffViewer.getElement());
+    }
+  }
+
   public update(state: AppState): void {
     this.diffViewer.render(state.diffs);
     this.renderTerminalStream(state.messages, state);
@@ -266,12 +274,21 @@ export class ClaudeCodeLayout {
   }
 
   private formatCliOutput(text: string): string {
-    let out = this.escapeHtml(text);
-    out = out.replace(/```([a-z]*)\n([\s\S]*?)```/g, (_m, _lang, code) => {
-      return `<pre class="cli-code-block"><code>${code}</code></pre>`;
-    });
-    out = out.replace(/`([^`]+)`/g, '<span class="cli-highlight">$1</span>');
-    out = out.replace(/\n/g, '<br/>');
-    return out;
+    if (!text) return '';
+    const parts = text.split(/(```[\s\S]*?```)/g);
+    return parts
+      .map((part) => {
+        if (part.startsWith('```') && part.endsWith('```')) {
+          const firstLineEnd = part.indexOf('\n');
+          const lang = firstLineEnd !== -1 ? part.slice(3, firstLineEnd).trim() : '';
+          const code = firstLineEnd !== -1 ? part.slice(firstLineEnd + 1, -3) : part.slice(3, -3);
+          return `<pre class="cli-code-block"${lang ? ` data-lang="${this.escapeHtml(lang)}"` : ''}><code>${this.escapeHtml(code)}</code></pre>`;
+        }
+        let out = this.escapeHtml(part);
+        out = out.replace(/`([^`]+)`/g, '<span class="cli-highlight">$1</span>');
+        out = out.replace(/\n/g, '<br/>');
+        return out;
+      })
+      .join('');
   }
 }

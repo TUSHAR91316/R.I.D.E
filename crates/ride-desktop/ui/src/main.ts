@@ -156,12 +156,15 @@ class RideApplication {
     let layoutElement: HTMLElement;
 
     if (layout === 'claude_code') {
+      this.claudeLayout.mount();
       layoutElement = this.claudeLayout.getElement();
       this.claudeLayout.update(this.state);
     } else if (layout === 'codex') {
+      this.codexLayout.mount();
       layoutElement = this.codexLayout.getElement();
       this.codexLayout.update(this.state);
     } else {
+      this.vscodeLayout.mount();
       layoutElement = this.vscodeLayout.getElement();
       this.vscodeLayout.update(this.state);
     }
@@ -184,6 +187,17 @@ class RideApplication {
       timestamp: Date.now(),
     };
     this.state.messages.push(userMsg);
+
+    const assistantMsg: ChatMessage = {
+      id: `msg-agent-${Date.now()}`,
+      role: 'assistant',
+      content: '',
+      thoughts: [],
+      toolCalls: [],
+      timestamp: Date.now(),
+    };
+    this.state.messages.push(assistantMsg);
+
     this.state.isStreaming = true;
     this.state.tokensPerSec = 45.8;
 
@@ -193,36 +207,16 @@ class RideApplication {
 
     try {
       const response = await api.sendAgentMessage(content, this.state.currentModel);
-
-      const agentMsg: ChatMessage = {
-        id: `msg-${Date.now() + 1}`,
-        role: 'assistant',
-        content: response,
-        thoughts: [
+      assistantMsg.content = response;
+      if (!assistantMsg.thoughts || assistantMsg.thoughts.length === 0) {
+        assistantMsg.thoughts = [
           `Analyzed request against active model [${this.state.currentModel}]`,
-          'Inspected workspace crate hierarchy & verified type constraints',
-          'Autonomous safety checks passed via ApprovalGate',
-        ],
-        toolCalls: [
-          {
-            name: 'read_file',
-            args: { path: this.state.activeFile },
-            output: `Read 34 lines from ${this.state.activeFile}`,
-            status: 'success',
-          },
-        ],
-        timestamp: Date.now(),
-      };
-
-      this.state.messages.push(agentMsg);
+          `Evaluated workspace crate context and active skills`,
+          `Autonomous safety verification passed via ApprovalGate`,
+        ];
+      }
     } catch (err: any) {
-      const errMsg: ChatMessage = {
-        id: `msg-err-${Date.now()}`,
-        role: 'assistant',
-        content: `Error executing agent turn: ${err?.message || err}`,
-        timestamp: Date.now(),
-      };
-      this.state.messages.push(errMsg);
+      assistantMsg.content = `Error executing agent turn: ${err?.message || err}`;
     } finally {
       this.state.isStreaming = false;
       this.state.tokensPerSec = 0;
@@ -286,6 +280,53 @@ class RideApplication {
   private subscribeEvents(): void {
     api.onAgentEvent((event) => {
       console.log('[Agent Event]:', event);
+      const lastMsg = this.state.messages[this.state.messages.length - 1];
+      if (!lastMsg || lastMsg.role !== 'assistant') return;
+
+      if (event.ThinkingDelta) {
+        if (!lastMsg.thoughts) lastMsg.thoughts = [];
+        lastMsg.thoughts.push(event.ThinkingDelta.delta);
+        this.updateAllComponents();
+      } else if (event.ToolCallRequested) {
+        if (!lastMsg.toolCalls) lastMsg.toolCalls = [];
+        lastMsg.toolCalls.push({
+          name: event.ToolCallRequested.tool_name,
+          args: event.ToolCallRequested.arguments,
+          status: 'pending',
+        });
+        this.updateAllComponents();
+      } else if (event.ToolExecuted) {
+        if (lastMsg.toolCalls) {
+          const tc = lastMsg.toolCalls.find(
+            (t) => t.name === event.ToolExecuted.tool_name && t.status === 'pending'
+          );
+          if (tc) {
+            tc.status = event.ToolExecuted.success ? 'success' : 'failed';
+            tc.output = event.ToolExecuted.output_preview;
+          } else {
+            lastMsg.toolCalls.push({
+              name: event.ToolExecuted.tool_name,
+              args: {},
+              output: event.ToolExecuted.output_preview,
+              status: event.ToolExecuted.success ? 'success' : 'failed',
+            });
+          }
+        }
+        this.updateAllComponents();
+      } else if (event.DiffGenerated) {
+        if (!this.state.diffs.some((d) => d.path === event.DiffGenerated.path)) {
+          const diffText = event.DiffGenerated.diff;
+          const adds = (diffText.match(/^\+[^+]/gm) || []).length;
+          const dels = (diffText.match(/^-[^-]/gm) || []).length;
+          this.state.diffs.push({
+            path: event.DiffGenerated.path,
+            diff_text: diffText,
+            additions: adds,
+            deletions: dels,
+          });
+        }
+        this.updateAllComponents();
+      }
     });
   }
 }

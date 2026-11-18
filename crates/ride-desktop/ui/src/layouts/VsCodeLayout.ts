@@ -13,6 +13,7 @@ export class VsCodeLayout {
   private activeActivity: 'explorer' | 'search' | 'skills' | 'models' = 'explorer';
   private activeDockTab: 'chat' | 'diffs' = 'chat';
   private isDockCollapsed: boolean = false;
+  private currentState: AppState | null = null;
 
   constructor(
     editor: EditorComponent,
@@ -34,7 +35,24 @@ export class VsCodeLayout {
     return this.element;
   }
 
+  public mount(): void {
+    const editorPane = this.element.querySelector<HTMLElement>('.editor-pane');
+    if (editorPane && !editorPane.contains(this.editor.getElement())) {
+      editorPane.innerHTML = '';
+      editorPane.appendChild(this.editor.getElement());
+    }
+    this.updateDockContent();
+    if (this.activeActivity === 'skills') {
+      const sidebarContent = this.element.querySelector<HTMLElement>('.sidebar-content');
+      if (sidebarContent && !sidebarContent.contains(this.skillsManager.getElement())) {
+        sidebarContent.innerHTML = '';
+        sidebarContent.appendChild(this.skillsManager.getElement());
+      }
+    }
+  }
+
   public update(state: AppState): void {
+    this.currentState = state;
     this.diffViewer.render(state.diffs);
     this.skillsManager.render(state.skills);
     this.chat.updateMessages(state.messages);
@@ -216,8 +234,9 @@ export class VsCodeLayout {
           this.activeActivity = act;
           activityButtons.forEach((b) => b.classList.remove('active'));
           btn.classList.add('active');
-          const mockState: any = { providers: [], skills: [], diffs: [], messages: [] };
-          this.updateSideBarContent(mockState);
+          if (this.currentState) {
+            this.updateSideBarContent(this.currentState);
+          }
         }
       });
     });

@@ -28,6 +28,20 @@ export class CodexLayout {
     return this.element;
   }
 
+  public mount(): void {
+    const editorWrapper = this.element.querySelector<HTMLElement>('.zen-editor-wrapper');
+    if (editorWrapper && !editorWrapper.contains(this.editor.getElement())) {
+      editorWrapper.innerHTML = '';
+      editorWrapper.appendChild(this.editor.getElement());
+    }
+
+    const assistantContent = this.element.querySelector<HTMLElement>('.assistant-content');
+    if (assistantContent && !assistantContent.contains(this.chat.getElement())) {
+      assistantContent.innerHTML = '';
+      assistantContent.appendChild(this.chat.getElement());
+    }
+  }
+
   public update(state: AppState): void {
     this.chat.updateMessages(state.messages);
   }
@@ -76,18 +90,7 @@ export class CodexLayout {
       </div>
     `;
 
-    // Mount Editor
-    const editorWrapper = this.element.querySelector<HTMLElement>('.zen-editor-wrapper');
-    if (editorWrapper) {
-      editorWrapper.appendChild(this.editor.getElement());
-    }
-
-    // Mount Chat inside Side Assistant
-    const assistantContent = this.element.querySelector<HTMLElement>('.assistant-content');
-    if (assistantContent) {
-      assistantContent.appendChild(this.chat.getElement());
-    }
-
+    this.mount();
     this.attachEvents();
   }
 

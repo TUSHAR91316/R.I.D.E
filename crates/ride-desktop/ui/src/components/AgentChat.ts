@@ -184,13 +184,20 @@ export class AgentChat {
 
   private formatContent(content: string): string {
     if (!content) return '';
-    // Format simple markdown code blocks
-    let formatted = this.escapeHtml(content);
-    formatted = formatted.replace(/```([a-z]*)\n([\s\S]*?)```/g, (_match, _lang, code) => {
-      return `<pre class="code-block"><code>${code}</code></pre>`;
-    });
-    formatted = formatted.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
-    formatted = formatted.replace(/\n/g, '<br/>');
-    return formatted;
+    const parts = content.split(/(```[\s\S]*?```)/g);
+    return parts
+      .map((part) => {
+        if (part.startsWith('```') && part.endsWith('```')) {
+          const firstLineEnd = part.indexOf('\n');
+          const lang = firstLineEnd !== -1 ? part.slice(3, firstLineEnd).trim() : '';
+          const code = firstLineEnd !== -1 ? part.slice(firstLineEnd + 1, -3) : part.slice(3, -3);
+          return `<pre class="code-block"${lang ? ` data-lang="${this.escapeHtml(lang)}"` : ''}><code>${this.escapeHtml(code)}</code></pre>`;
+        }
+        let formatted = this.escapeHtml(part);
+        formatted = formatted.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+        formatted = formatted.replace(/\n/g, '<br/>');
+        return formatted;
+      })
+      .join('');
   }
 }
