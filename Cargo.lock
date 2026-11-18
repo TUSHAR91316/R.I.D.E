@@ -902,6 +902,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-util",
+ "regex",
  "reqwest",
  "ride-core",
  "ride-discovery",

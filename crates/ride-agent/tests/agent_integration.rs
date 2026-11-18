@@ -174,6 +174,61 @@ async fn test_end_to_end_dynamic_skill_tool_with_approval_gate() {
 }
 
 #[tokio::test]
+async fn test_end_to_end_dynamic_skill_tool_denied_by_approval_gate() {
+    let tmp_dir = std::env::temp_dir().join("ride_e2e_dyn_tool_deny");
+    let _ = std::fs::create_dir_all(&tmp_dir);
+
+    let script_name = if cfg!(target_os = "windows") {
+        let script = tmp_dir.join("calc_deny.bat");
+        std::fs::write(&script, "@echo off\r\necho DANGEROUS\r\n").unwrap();
+        "calc_deny.bat"
+    } else {
+        let script = tmp_dir.join("calc_deny.sh");
+        std::fs::write(&script, "#!/bin/sh\necho 'DANGEROUS'\n").unwrap();
+        "calc_deny.sh"
+    };
+
+    let def = DynamicToolDefinition {
+        name: "calculate_custom_denied".into(),
+        description: "Calculate custom values".into(),
+        parameters: json!({}),
+        script: script_name.into(),
+        timeout_ms: 5000,
+    };
+
+    let mut dyn_registry = DynamicToolRegistry::new();
+    dyn_registry.register(DynamicSkillTool::new(def, &tmp_dir));
+
+    let responses = vec![
+        "<tool_call name=\"calculate_custom_denied\"></tool_call>".into(),
+        "Calculation was blocked.".into(),
+    ];
+
+    let mock_client = Arc::new(MockLlmClient::new_with_queue(responses));
+    let approval_gate = Arc::new(TerminalApprovalGate::new(ApprovalPolicy::Deny));
+
+    let config = AgentSessionConfig {
+        approval_policy: ApprovalPolicy::Deny,
+        working_dir: Some(tmp_dir.clone()),
+        ..Default::default()
+    };
+
+    let mut session = AgentSession::new(config, mock_client)
+        .with_dynamic_tools(dyn_registry)
+        .with_approval_gate(approval_gate);
+
+    let cancel = CancellationToken::new();
+    let res = session.execute_turn("Run calc", cancel).await.unwrap();
+
+    assert!(res.completed);
+    assert_eq!(res.executed_tools.len(), 1);
+    assert!(!res.executed_tools[0].success);
+    assert!(res.executed_tools[0].output.contains("denied by Deny policy"));
+
+    let _ = std::fs::remove_dir_all(tmp_dir);
+}
+
+#[tokio::test]
 async fn test_end_to_end_terminal_approval_denial_halts_destructive_command() {
     let responses = vec![
         "<tool_call name=\"run_command\"><cmd>rm -rf /sensitive_data</cmd></tool_call>".into(),

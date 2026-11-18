@@ -147,7 +147,7 @@ impl DiffEngine {
             }
         }
 
-        let hunks = Self::build_hunks(&ops, context_lines);
+        let hunks = Self::build_hunks(&ops, context_lines, orig_is_empty, mod_is_empty);
 
         let mut diff_text = String::new();
         if !hunks.is_empty() {
@@ -223,14 +223,24 @@ impl DiffEngine {
             return old.iter().map(|&s| DiffOp::Delete(s)).collect();
         }
 
-        let mut dp = vec![vec![0u32; n + 1]; m + 1];
+        if m * n > 2_000_000 {
+            let mut ops = Vec::with_capacity(m + n);
+            for &s in old { ops.push(DiffOp::Delete(s)); }
+            for &s in new { ops.push(DiffOp::Insert(s)); }
+            return ops;
+        }
+
+        let stride = n + 1;
+        let mut dp = vec![0u32; (m + 1) * stride];
 
         for i in 0..m {
+            let row = i * stride;
+            let next_row = (i + 1) * stride;
             for j in 0..n {
                 if old[i] == new[j] {
-                    dp[i + 1][j + 1] = dp[i][j] + 1;
+                    dp[next_row + j + 1] = dp[row + j] + 1;
                 } else {
-                    dp[i + 1][j + 1] = dp[i + 1][j].max(dp[i][j + 1]);
+                    dp[next_row + j + 1] = dp[row + j + 1].max(dp[next_row + j]);
                 }
             }
         }
@@ -240,11 +250,14 @@ impl DiffEngine {
         let mut j = n;
 
         while i > 0 || j > 0 {
+            let cur_row = i * stride;
+            let prev_row = if i > 0 { (i - 1) * stride } else { 0 };
+
             if i > 0 && j > 0 && old[i - 1] == new[j - 1] {
                 ops.push(DiffOp::Keep(old[i - 1]));
                 i -= 1;
                 j -= 1;
-            } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+            } else if j > 0 && (i == 0 || dp[cur_row + j - 1] >= dp[prev_row + j]) {
                 ops.push(DiffOp::Insert(new[j - 1]));
                 j -= 1;
             } else if i > 0 {
@@ -258,7 +271,12 @@ impl DiffEngine {
     }
 
     /// Groups diff operations into contextual hunks.
-    fn build_hunks(ops: &[DiffOp<'_>], context_size: usize) -> Vec<DiffHunk> {
+    fn build_hunks(
+        ops: &[DiffOp<'_>],
+        context_size: usize,
+        orig_is_empty: bool,
+        mod_is_empty: bool,
+    ) -> Vec<DiffHunk> {
         let mut change_indices = Vec::new();
         for (idx, op) in ops.iter().enumerate() {
             if !matches!(op, DiffOp::Keep(_)) {
@@ -340,13 +358,13 @@ impl DiffEngine {
                 }
             }
 
-            let old_start = if old_count == 0 {
+            let old_start = if orig_is_empty {
                 0
             } else {
                 old_line_at[hunk_start]
             };
 
-            let new_start = if new_count == 0 {
+            let new_start = if mod_is_empty {
                 0
             } else {
                 new_line_at[hunk_start]
@@ -517,7 +535,7 @@ impl DiffManager {
 
         let idx = guard
             .iter()
-            .rposition(|s| s.path == path)
+            .rposition(|s| paths_match(&s.path, path))
             .ok_or_else(|| RideError::Agent(format!("No snapshot found for {}", path.display())))?;
 
         let snapshot = guard.remove(idx);
@@ -569,12 +587,37 @@ impl DiffManager {
 
     pub fn can_rollback(&self, path: impl AsRef<Path>) -> bool {
         let path = path.as_ref();
-        self.snapshots.lock().unwrap().iter().any(|s| s.path == path)
+        self.snapshots.lock().unwrap().iter().any(|s| paths_match(&s.path, path))
     }
 
     pub fn clear_snapshots(&self) {
         self.snapshots.lock().unwrap().clear();
     }
+}
+
+pub fn paths_match(stored: &Path, requested: &Path) -> bool {
+    if stored == requested {
+        return true;
+    }
+    if let (Ok(ca), Ok(cb)) = (std::fs::canonicalize(stored), std::fs::canonicalize(requested)) {
+        if ca == cb {
+            return true;
+        }
+    }
+    let s_norm = stored.to_string_lossy().replace('\\', "/").to_lowercase();
+    let r_norm = requested.to_string_lossy().replace('\\', "/").to_lowercase();
+    if s_norm == r_norm {
+        return true;
+    }
+    let s_clean = s_norm.trim_start_matches("./");
+    let r_clean = r_norm.trim_start_matches("./");
+    if s_clean == r_clean {
+        return true;
+    }
+    if s_clean.ends_with(&format!("/{r_clean}")) || r_clean.ends_with(&format!("/{s_clean}")) {
+        return true;
+    }
+    false
 }
 
 fn compute_replacement(
@@ -595,7 +638,12 @@ fn compute_replacement(
             let target_lf = target.replace("\r\n", "\n");
             let content_lf = content.replace("\r\n", "\n");
             if content_lf.contains(&target_lf) {
-                Ok(content_lf.replace(&target_lf, replacement))
+                let res = content_lf.replace(&target_lf, replacement);
+                if content.contains("\r\n") {
+                    Ok(res.replace("\r\n", "\n").replace('\n', "\r\n"))
+                } else {
+                    Ok(res)
+                }
             } else {
                 Err(RideError::Agent(format!(
                     "Target string '{}' not found in {}",
@@ -691,6 +739,50 @@ mod tests {
         let rolled_back2 = manager.rollback_latest_for_path(&test_file).unwrap();
         assert_eq!(rolled_back2.id, snap1.id);
         assert!(!test_file.exists());
+
+        let _ = std::fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn test_diff_pure_insertion_in_existing_file_has_correct_old_line_start() {
+        let original = "line1\nline2\nline3\n";
+        let modified = "line1\nline_inserted\nline2\nline3\n";
+        // 0 context lines: pure insertion at line 2
+        let diff = DiffEngine::create_diff("test.txt", original, modified, 0);
+        assert_eq!(diff.hunks.len(), 1);
+        let hunk = &diff.hunks[0];
+        // Must NOT be -0,0 because file is not empty!
+        assert_ne!(hunk.old_start, 0);
+        assert_eq!(hunk.new_lines, 1);
+        assert_eq!(hunk.old_lines, 0);
+        assert!(hunk.header().contains("+2"));
+    }
+
+    #[test]
+    fn test_rollback_cross_format_paths() {
+        let tmp_dir = std::env::temp_dir().join("ride_diff_cross_path_test");
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let test_file = tmp_dir.join("sub").join("nested.rs");
+
+        let manager = DiffManager::new(3);
+        let (_, snap) = manager
+            .apply_write_with_backup(&test_file, "original content\n")
+            .unwrap();
+
+        let (_, _) = manager
+            .apply_write_with_backup(&test_file, "modified content\n")
+            .unwrap();
+
+        // Query with forward slashes on Windows
+        let query_path_fwd = test_file.to_string_lossy().replace('\\', "/");
+        assert!(manager.can_rollback(&query_path_fwd));
+
+        let rolled_back = manager.rollback_latest_for_path(&query_path_fwd).unwrap();
+        assert_eq!(rolled_back.id, snap.id + 1);
+        assert_eq!(
+            std::fs::read_to_string(&test_file).unwrap(),
+            "original content\n"
+        );
 
         let _ = std::fs::remove_dir_all(tmp_dir);
     }

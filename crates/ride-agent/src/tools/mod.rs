@@ -45,14 +45,29 @@ impl Toolset {
 
         let total_file_lines = lines.len();
         let (start, end, was_capped) = match (start_line, end_line) {
-            (Some(s), Some(e)) => (s.saturating_sub(1), e.min(total_file_lines), false),
+            (Some(s), Some(e)) => {
+                let start_idx = s.saturating_sub(1);
+                let requested_end = e.min(total_file_lines);
+                if requested_end > start_idx + max_lines_limit {
+                    (start_idx, start_idx + max_lines_limit, true)
+                } else {
+                    (start_idx, requested_end, false)
+                }
+            }
             (Some(s), None) => {
                 let start_idx = s.saturating_sub(1);
                 let end_idx = (start_idx + max_lines_limit).min(total_file_lines);
                 let capped = total_file_lines > start_idx + max_lines_limit;
                 (start_idx, end_idx, capped)
             }
-            (None, Some(e)) => (0, e.min(total_file_lines), false),
+            (None, Some(e)) => {
+                let requested_end = e.min(total_file_lines);
+                if requested_end > max_lines_limit {
+                    (0, max_lines_limit, true)
+                } else {
+                    (0, requested_end, false)
+                }
+            }
             (None, None) => {
                 if total_file_lines > max_lines_limit {
                     (0, max_lines_limit, true)
@@ -142,7 +157,7 @@ impl Toolset {
     }
 
     pub fn search_code(dir: impl AsRef<Path>, query: &str, case_sensitive: bool) -> Result<Vec<SearchMatch>> {
-        Self::search_code_budgeted(dir, query, case_sensitive, 50)
+        Self::search_code_full(dir, query, case_sensitive, false, 50)
     }
 
     pub fn search_code_budgeted(
@@ -151,15 +166,46 @@ impl Toolset {
         case_sensitive: bool,
         max_matches: usize,
     ) -> Result<Vec<SearchMatch>> {
+        Self::search_code_full(dir, query, case_sensitive, false, max_matches)
+    }
+
+    pub fn search_code_full(
+        dir: impl AsRef<Path>,
+        query: &str,
+        case_sensitive: bool,
+        is_regex: bool,
+        max_matches: usize,
+    ) -> Result<Vec<SearchMatch>> {
         let dir = dir.as_ref();
-        let mut matches = Vec::new();
-        let query_normalized = if case_sensitive {
-            query.to_string()
+        let query_trimmed = query.trim();
+        if query_trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let regex_matcher = if is_regex {
+            regex::RegexBuilder::new(query_trimmed)
+                .case_insensitive(!case_sensitive)
+                .build()
+                .ok()
         } else {
-            query.to_lowercase()
+            None
         };
 
-        Self::search_dir_recursive(dir, &query_normalized, case_sensitive, &mut matches, max_matches)?;
+        let query_normalized = if case_sensitive {
+            query_trimmed.to_string()
+        } else {
+            query_trimmed.to_lowercase()
+        };
+
+        let mut matches = Vec::new();
+        Self::search_dir_recursive(
+            dir,
+            &query_normalized,
+            case_sensitive,
+            regex_matcher.as_ref(),
+            &mut matches,
+            max_matches,
+        )?;
         Ok(matches)
     }
 
@@ -167,6 +213,7 @@ impl Toolset {
         dir: &Path,
         query: &str,
         case_sensitive: bool,
+        regex_matcher: Option<&regex::Regex>,
         matches: &mut Vec<SearchMatch>,
         max_matches: usize,
     ) -> Result<()> {
@@ -193,14 +240,23 @@ impl Toolset {
             }
 
             if path.is_dir() {
-                let _ = Self::search_dir_recursive(&path, query, case_sensitive, matches, max_matches);
+                let _ = Self::search_dir_recursive(
+                    &path,
+                    query,
+                    case_sensitive,
+                    regex_matcher,
+                    matches,
+                    max_matches,
+                );
             } else if path.is_file() {
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     for (line_idx, line) in content.lines().enumerate() {
                         if matches.len() >= max_matches {
                             break;
                         }
-                        let matched = if case_sensitive {
+                        let matched = if let Some(re) = regex_matcher {
+                            re.is_match(line)
+                        } else if case_sensitive {
                             line.contains(query)
                         } else {
                             line.to_lowercase().contains(query)
@@ -305,5 +361,40 @@ mod tests {
         assert!(read.contains("[File has 500 lines. Showing lines 1-300"));
 
         let _ = std::fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn test_read_file_budgeted_caps_explicit_oversized_range() {
+        let tmp = std::env::temp_dir().join("ride_range_cap_test.txt");
+        let content = (1..=500).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        Toolset::write_file(&tmp, &content).unwrap();
+
+        // Even with explicit start_line: 1, end_line: 500, it must be capped by max_lines_limit
+        let read = Toolset::read_file_budgeted(&tmp, Some(1), Some(500), 50).unwrap();
+        assert!(read.contains("line 50"));
+        assert!(!read.contains("line 51\n"));
+        assert!(read.contains("[File has 500 lines. Showing lines 1-50 (capped at 50 lines)."));
+
+        let _ = std::fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn test_search_code_regex_and_empty() {
+        let tmp_dir = std::env::temp_dir().join("ride_search_regex_test");
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let file = tmp_dir.join("sample.rs");
+        std::fs::write(&file, "fn calculate_total() {}\nlet x = 10;\nfn verify_result() {}\n").unwrap();
+
+        // Empty query
+        let empty_res = Toolset::search_code_full(&tmp_dir, "", false, false, 50).unwrap();
+        assert!(empty_res.is_empty());
+
+        // Regex search
+        let regex_res = Toolset::search_code_full(&tmp_dir, r"fn\s+[a-z_]+", false, true, 50).unwrap();
+        assert_eq!(regex_res.len(), 2);
+        assert!(regex_res.iter().any(|m| m.line_text.contains("calculate_total")));
+        assert!(regex_res.iter().any(|m| m.line_text.contains("verify_result")));
+
+        let _ = std::fs::remove_dir_all(tmp_dir);
     }
 }

@@ -93,8 +93,14 @@ impl AgentExecutor {
         match call.name.as_str() {
             "read_file" => {
                 let path = call.arguments["path"].as_str().unwrap_or_default();
-                let start = call.arguments["start_line"].as_u64().map(|v| v as usize);
-                let end = call.arguments["end_line"].as_u64().map(|v| v as usize);
+                let start = call.arguments["start_line"]
+                    .as_u64()
+                    .map(|v| v as usize)
+                    .or_else(|| call.arguments["start_line"].as_str().and_then(|s| s.trim().parse().ok()));
+                let end = call.arguments["end_line"]
+                    .as_u64()
+                    .map(|v| v as usize)
+                    .or_else(|| call.arguments["end_line"].as_str().and_then(|s| s.trim().parse().ok()));
                 match Toolset::read_file(path, start, end) {
                     Ok(out) => ToolResult {
                         success: true,
@@ -160,8 +166,16 @@ impl AgentExecutor {
                     .or_else(|| call.arguments["dir"].as_str())
                     .unwrap_or(".");
                 let query = call.arguments["query"].as_str().unwrap_or_default();
-                let case_sensitive = call.arguments["case_sensitive"].as_bool().unwrap_or(false);
-                match Toolset::search_code(dir, query, case_sensitive) {
+                let case_sensitive = call.arguments["case_sensitive"]
+                    .as_bool()
+                    .or_else(|| call.arguments["case_sensitive"].as_str().and_then(|s| s.trim().parse().ok()))
+                    .unwrap_or(false);
+                let is_regex = call.arguments["regex"]
+                    .as_bool()
+                    .or_else(|| call.arguments["is_regex"].as_bool())
+                    .or_else(|| call.arguments["regex"].as_str().and_then(|s| s.trim().parse().ok()))
+                    .unwrap_or(false);
+                match Toolset::search_code_full(dir, query, case_sensitive, is_regex, 50) {
                     Ok(matches) => {
                         let lines: Vec<String> = matches
                             .into_iter()
@@ -241,8 +255,14 @@ impl AgentExecutor {
         match call.name.as_str() {
             "read_file" => {
                 let path = call.arguments["path"].as_str().unwrap_or_default();
-                let start = call.arguments["start_line"].as_u64().map(|v| v as usize);
-                let end = call.arguments["end_line"].as_u64().map(|v| v as usize);
+                let start = call.arguments["start_line"]
+                    .as_u64()
+                    .map(|v| v as usize)
+                    .or_else(|| call.arguments["start_line"].as_str().and_then(|s| s.trim().parse().ok()));
+                let end = call.arguments["end_line"]
+                    .as_u64()
+                    .map(|v| v as usize)
+                    .or_else(|| call.arguments["end_line"].as_str().and_then(|s| s.trim().parse().ok()));
                 let resolved_path = match working_dir {
                     Some(dir) if !Path::new(path).is_absolute() => dir.join(path),
                     _ => Path::new(path).to_path_buf(),
@@ -387,15 +407,24 @@ impl AgentExecutor {
                     .or_else(|| call.arguments["dir"].as_str())
                     .unwrap_or(".");
                 let query = call.arguments["query"].as_str().unwrap_or_default();
-                let case_sensitive = call.arguments["case_sensitive"].as_bool().unwrap_or(false);
+                let case_sensitive = call.arguments["case_sensitive"]
+                    .as_bool()
+                    .or_else(|| call.arguments["case_sensitive"].as_str().and_then(|s| s.trim().parse().ok()))
+                    .unwrap_or(false);
+                let is_regex = call.arguments["regex"]
+                    .as_bool()
+                    .or_else(|| call.arguments["is_regex"].as_bool())
+                    .or_else(|| call.arguments["regex"].as_str().and_then(|s| s.trim().parse().ok()))
+                    .unwrap_or(false);
                 let resolved_path = match working_dir {
                     Some(d) if !Path::new(dir).is_absolute() => d.join(dir),
                     _ => Path::new(dir).to_path_buf(),
                 };
-                match Toolset::search_code_budgeted(
+                match Toolset::search_code_full(
                     &resolved_path,
                     query,
                     case_sensitive,
+                    is_regex,
                     budget.max_search_matches,
                 ) {
                     Ok(matches) => {
@@ -466,6 +495,19 @@ impl AgentExecutor {
             custom_name => {
                 if let Some(registry) = dynamic_tools {
                     if let Some(tool) = registry.get(custom_name) {
+                        // Dynamic tool scripts are external code execution; enforce approval gate
+                        if let Some(gate) = approval_gate {
+                            let cmd_repr = format!("dynamic_tool: {custom_name} ({})", tool.definition.script);
+                            if let Err(e) = gate.check_approval(&cmd_repr, working_dir).await {
+                                return ToolExecutionOutcome {
+                                    success: false,
+                                    output: e.to_string(),
+                                    diff: None,
+                                    snapshot: None,
+                                };
+                            }
+                        }
+
                         return match tool.execute_sync(&call.arguments, working_dir) {
                             Ok(out) => {
                                 let combined = if !out.stderr.is_empty() {

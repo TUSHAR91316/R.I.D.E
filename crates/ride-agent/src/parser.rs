@@ -10,7 +10,7 @@ pub struct AgentToolParser;
 
 impl AgentToolParser {
     /// Attempts to parse tool calls from both standard JSON function calls, markdown fences,
-    /// and XML fallback tags.
+    /// embedded JSON, and XML fallback tags.
     pub fn parse(text: &str) -> Vec<ParsedToolCall> {
         let trimmed = text.trim();
         let mut results = Vec::new();
@@ -54,36 +54,146 @@ impl AgentToolParser {
             return results;
         }
 
+        // 2b. Embedded JSON check (e.g. conversational text followed by raw JSON object)
+        let mut scan_pos = 0;
+        while let Some(start) = text[scan_pos..].find('{') {
+            let actual_start = scan_pos + start;
+            let mut depth = 0;
+            let mut end_pos = None;
+            let mut in_str = false;
+            let mut escape = false;
+
+            for (offset, c) in text[actual_start..].char_indices() {
+                if escape {
+                    escape = false;
+                    continue;
+                }
+                if c == '\\' && in_str {
+                    escape = true;
+                    continue;
+                }
+                if c == '"' {
+                    in_str = !in_str;
+                    continue;
+                }
+                if !in_str {
+                    if c == '{' {
+                        depth += 1;
+                    } else if c == '}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            end_pos = Some(actual_start + offset + 1);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if let Some(end) = end_pos {
+                let json_candidate = &text[actual_start..end];
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_candidate) {
+                    let before_len = results.len();
+                    Self::extract_from_json_value(&val, &mut results);
+                    if results.len() > before_len {
+                        scan_pos = end;
+                        continue;
+                    }
+                }
+                scan_pos = actual_start + 1;
+            } else {
+                break;
+            }
+        }
+
+        if !results.is_empty() {
+            return results;
+        }
+
         // 3. XML fallback: <tool_call ...>...</tool_call>
         let mut search_idx = 0;
         while let Some(start_tag) = text[search_idx..].find("<tool_call") {
             let actual_start = search_idx + start_tag;
             if let Some(tag_close) = text[actual_start..].find('>') {
                 let header = &text[actual_start..actual_start + tag_close];
+                let is_self_closing = header.trim_end().ends_with('/');
                 let mut tool_name = Self::extract_attribute(header, "name")
                     .or_else(|| Self::extract_attribute(header, "tool"))
                     .or_else(|| Self::extract_attribute(header, "function"));
 
-                let body_start = actual_start + tag_close + 1;
-                if let Some(end_tag) = text[body_start..].find("</tool_call>") {
-                    let content = text[body_start..body_start + end_tag].trim();
-
-                    if tool_name.is_none() {
-                        // Check if body has <name>tool</name>
-                        tool_name = Self::extract_inner_tag(content, "name");
+                if is_self_closing {
+                    if let Some(name) = tool_name {
+                        results.push(ParsedToolCall {
+                            name,
+                            arguments: serde_json::Value::Object(serde_json::Map::new()),
+                        });
                     }
-
-                    let name = tool_name.unwrap_or_else(|| "unknown".into());
-                    let args = Self::parse_tool_body(content);
-                    results.push(ParsedToolCall {
-                        name,
-                        arguments: args,
-                    });
-                    search_idx = body_start + end_tag + 12;
+                    search_idx = actual_start + tag_close + 1;
                     continue;
                 }
+
+                let body_start = actual_start + tag_close + 1;
+                let next_tc_opt = text[body_start..].find("<tool_call");
+                let end_tag_opt = text[body_start..].find("</tool_call>");
+
+                match (end_tag_opt, next_tc_opt) {
+                    (Some(end_tag), None) => {
+                        let content = &text[body_start..body_start + end_tag];
+                        if tool_name.is_none() {
+                            tool_name = Self::extract_inner_tag(content, "name");
+                        }
+                        let name = tool_name.unwrap_or_else(|| "unknown".into());
+                        let args = Self::parse_tool_body(content);
+                        results.push(ParsedToolCall {
+                            name,
+                            arguments: args,
+                        });
+                        search_idx = body_start + end_tag + 12;
+                        continue;
+                    }
+                    (Some(end_tag), Some(next_tc)) if end_tag < next_tc => {
+                        let content = &text[body_start..body_start + end_tag];
+                        if tool_name.is_none() {
+                            tool_name = Self::extract_inner_tag(content, "name");
+                        }
+                        let name = tool_name.unwrap_or_else(|| "unknown".into());
+                        let args = Self::parse_tool_body(content);
+                        results.push(ParsedToolCall {
+                            name,
+                            arguments: args,
+                        });
+                        search_idx = body_start + end_tag + 12;
+                        continue;
+                    }
+                    (_, Some(next_tc)) => {
+                        let content = &text[body_start..body_start + next_tc];
+                        if let Some(name) = tool_name.or_else(|| Self::extract_inner_tag(content, "name")) {
+                            let args = Self::parse_tool_body(content);
+                            if args.as_object().map_or(false, |m| !m.is_empty()) {
+                                results.push(ParsedToolCall {
+                                    name,
+                                    arguments: args,
+                                });
+                            }
+                        }
+                        search_idx = body_start + next_tc;
+                        continue;
+                    }
+                    (None, None) => {
+                        let content = &text[body_start..];
+                        if let Some(name) = tool_name.or_else(|| Self::extract_inner_tag(content, "name")) {
+                            let args = Self::parse_tool_body(content);
+                            if args.as_object().map_or(false, |m| !m.is_empty()) {
+                                results.push(ParsedToolCall {
+                                    name,
+                                    arguments: args,
+                                });
+                            }
+                        }
+                        break;
+                    }
+                }
             }
-            break;
+            search_idx = actual_start + 10;
         }
 
         if !results.is_empty() {
@@ -106,7 +216,7 @@ impl AgentToolParser {
             while let Some(start) = text[search_pos..].find(&open_tag) {
                 let body_start = search_pos + start + open_tag.len();
                 if let Some(end) = text[body_start..].find(&close_tag) {
-                    let body = text[body_start..body_start + end].trim();
+                    let body = &text[body_start..body_start + end];
                     let args = Self::parse_tool_body(body);
                     results.push(ParsedToolCall {
                         name: tool.to_string(),
@@ -145,7 +255,7 @@ impl AgentToolParser {
                 let args = match func.get("arguments") {
                     Some(serde_json::Value::String(s)) => {
                         serde_json::from_str::<serde_json::Value>(s)
-                            .unwrap_or(serde_json::Value::String(s.clone()))
+                            .unwrap_or_else(|_| serde_json::Value::String(s.clone()))
                     }
                     Some(other) => other.clone(),
                     None => serde_json::Value::Object(serde_json::Map::new()),
@@ -155,8 +265,25 @@ impl AgentToolParser {
                     arguments: args,
                 });
             }
-        } else if let Some(name) = val.get("name").and_then(|n| n.as_str()) {
-            let args = val.get("arguments").cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        } else if let Some(name) = val
+            .get("name")
+            .or_else(|| val.get("tool"))
+            .or_else(|| val.get("tool_name"))
+            .and_then(|n| n.as_str())
+        {
+            let raw_args = val
+                .get("arguments")
+                .or_else(|| val.get("parameters"))
+                .or_else(|| val.get("args"));
+
+            let args = match raw_args {
+                Some(serde_json::Value::String(s)) => {
+                    serde_json::from_str::<serde_json::Value>(s)
+                        .unwrap_or_else(|_| serde_json::Value::String(s.clone()))
+                }
+                Some(other) => other.clone(),
+                None => serde_json::Value::Object(serde_json::Map::new()),
+            };
             results.push(ParsedToolCall {
                 name: name.to_string(),
                 arguments: args,
@@ -192,9 +319,33 @@ impl AgentToolParser {
         None
     }
 
+    fn strip_tag_wrapping_newlines(s: &str) -> &str {
+        let mut res = s;
+        if res.starts_with("\r\n") {
+            res = &res[2..];
+        } else if res.starts_with('\n') {
+            res = &res[1..];
+        }
+        if let Some(last_nl) = res.rfind('\n') {
+            if res[last_nl + 1..].chars().all(|c| c == ' ' || c == '\t' || c == '\r') {
+                let end = if last_nl > 0 && res.as_bytes()[last_nl - 1] == b'\r' {
+                    last_nl - 1
+                } else {
+                    last_nl
+                };
+                res = &res[..end];
+            }
+        } else if res.ends_with("\r\n") {
+            res = &res[..res.len() - 2];
+        } else if res.ends_with('\n') {
+            res = &res[..res.len() - 1];
+        }
+        res
+    }
+
     fn parse_tool_body(body: &str) -> serde_json::Value {
         // Try parsing body as json first
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(body.trim()) {
             return val;
         }
 
@@ -204,17 +355,47 @@ impl AgentToolParser {
         while let Some(open) = body[idx..].find('<') {
             let tag_start = idx + open;
             if let Some(close) = body[tag_start..].find('>') {
-                let tag_name = &body[tag_start + 1..tag_start + close];
-                if tag_name.starts_with('/') {
+                let tag_raw = &body[tag_start + 1..tag_start + close];
+                if tag_raw.starts_with('/') {
                     idx = tag_start + close + 1;
                     continue;
                 }
-                let end_tag = format!("</{tag_name}>");
+                let clean_tag_name = tag_raw
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or(tag_raw)
+                    .trim_end_matches('/');
+                if clean_tag_name.is_empty() {
+                    idx = tag_start + close + 1;
+                    continue;
+                }
+                let end_tag = format!("</{clean_tag_name}>");
                 let val_start = tag_start + close + 1;
                 if let Some(end_pos) = body[val_start..].find(&end_tag) {
-                    let val = &body[val_start..val_start + end_pos].trim();
-                    map.insert((*tag_name).to_string(), serde_json::Value::String((*val).to_string()));
+                    let raw_val = &body[val_start..val_start + end_pos];
+                    match clean_tag_name {
+                        "target" | "replacement" | "content" => {
+                            // Preserve indentation, only strip single wrapping newline if on its own line
+                            let clean = Self::strip_tag_wrapping_newlines(raw_val).to_string();
+                            map.insert(clean_tag_name.to_string(), serde_json::Value::String(clean));
+                        }
+                        _ => {
+                            let trimmed = raw_val.trim();
+                            if trimmed.eq_ignore_ascii_case("true") {
+                                map.insert(clean_tag_name.to_string(), serde_json::Value::Bool(true));
+                            } else if trimmed.eq_ignore_ascii_case("false") {
+                                map.insert(clean_tag_name.to_string(), serde_json::Value::Bool(false));
+                            } else if let Ok(num) = trimmed.parse::<i64>() {
+                                map.insert(clean_tag_name.to_string(), serde_json::Value::Number(num.into()));
+                            } else {
+                                map.insert(clean_tag_name.to_string(), serde_json::Value::String(trimmed.to_string()));
+                            }
+                        }
+                    }
                     idx = val_start + end_pos + end_tag.len();
+                    continue;
+                } else {
+                    idx = tag_start + 1;
                     continue;
                 }
             }
@@ -319,5 +500,77 @@ Here is the tool call:
         assert_eq!(calls[0].arguments["path"], "a.txt");
         assert_eq!(calls[0].arguments["target"], "x");
         assert_eq!(calls[0].arguments["replacement"], "y");
+    }
+
+    #[test]
+    fn test_embedded_json_in_conversational_text() {
+        let input = "Sure! I will read that file for you:\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"src/main.rs\"}}\nLet me know what else you need.";
+        let calls = AgentToolParser::parse(input);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments["path"], "src/main.rs");
+    }
+
+    #[test]
+    fn test_json_tool_and_parameters_syntax() {
+        let input = r#"{"tool": "read_file", "parameters": {"path": "src/lib.rs"}}"#;
+        let calls = AgentToolParser::parse(input);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments["path"], "src/lib.rs");
+    }
+
+    #[test]
+    fn test_xml_types_and_indentation_preservation() {
+        let input = r#"
+<tool_call name="read_file">
+  <path>src/main.rs</path>
+  <start_line>50</start_line>
+  <end_line>100</end_line>
+</tool_call>
+"#;
+        let calls = AgentToolParser::parse(input);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments["start_line"], 50);
+        assert_eq!(calls[0].arguments["end_line"], 100);
+
+        // Multiline code with indentation
+        let edit_input = r#"
+<tool_call name="edit_file">
+  <path>src/main.rs</path>
+  <target>
+    let x = 1;
+    let y = 2;
+  </target>
+  <replacement>
+    let x = 10;
+    let y = 20;
+  </replacement>
+</tool_call>
+"#;
+        let edit_calls = AgentToolParser::parse(edit_input);
+        assert_eq!(edit_calls.len(), 1);
+        assert_eq!(
+            edit_calls[0].arguments["target"],
+            "    let x = 1;\n    let y = 2;"
+        );
+        assert_eq!(
+            edit_calls[0].arguments["replacement"],
+            "    let x = 10;\n    let y = 20;"
+        );
+    }
+
+    #[test]
+    fn test_xml_self_closing_and_recovery() {
+        let input = "<tool_call name=\"list_dir\" />";
+        let calls = AgentToolParser::parse(input);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "list_dir");
+
+        // Malformed/unclosed XML tag followed by valid tag
+        let input_recovery = "<tool_call name=\"broken\"><path>missing_end\n<tool_call name=\"read_file\"><path>good.rs</path></tool_call>";
+        let recovery_calls = AgentToolParser::parse(input_recovery);
+        assert!(recovery_calls.iter().any(|c| c.name == "read_file"));
     }
 }

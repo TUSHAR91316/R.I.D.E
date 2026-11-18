@@ -171,6 +171,11 @@ impl ConversationHistory {
                 }
             }
         }
+
+        // Sliding window eviction if still over budget: drop oldest non-system message
+        while self.estimate_token_count() > max_tokens && self.messages.len() > 2 {
+            self.messages.remove(1);
+        }
     }
 }
 
@@ -234,6 +239,33 @@ impl HttpLlmClient {
                 });
                 if let Some(name) = &m.tool_name {
                     obj["name"] = serde_json::Value::String(name.clone());
+                    if m.role == ChatRole::Tool {
+                        obj["tool_call_id"] = serde_json::Value::String(format!("call_{name}"));
+                    }
+                } else if m.role == ChatRole::Tool {
+                    obj["tool_call_id"] = serde_json::Value::String("call_tool_0".into());
+                }
+
+                if let Some(calls) = &m.tool_calls {
+                    let formatted_calls: Vec<serde_json::Value> = calls
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| {
+                            serde_json::json!({
+                                "id": format!("call_{}_{i}", c.name),
+                                "type": "function",
+                                "function": {
+                                    "name": c.name,
+                                    "arguments": if c.arguments.is_string() {
+                                        c.arguments.as_str().unwrap_or_default().to_string()
+                                    } else {
+                                        serde_json::to_string(&c.arguments).unwrap_or_default()
+                                    }
+                                }
+                            })
+                        })
+                        .collect();
+                    obj["tool_calls"] = serde_json::Value::Array(formatted_calls);
                 }
                 obj
             })
@@ -288,9 +320,9 @@ impl LlmClient for HttpLlmClient {
                 }
 
                 match stream_task.await {
-                    Ok(Ok(())) => return Ok(full_text),
-                    Ok(Err(_)) | Err(_) if !full_text.is_empty() => return Ok(full_text),
-                    _ => {} // Fallback to non-streaming if stream connection failed
+                    Ok(Ok(())) if !full_text.trim().is_empty() => return Ok(full_text),
+                    Ok(Err(_)) | Err(_) if !full_text.trim().is_empty() => return Ok(full_text),
+                    _ => {} // Fallback to non-streaming if stream yielded no text (e.g. tool_calls in message)
                 }
             }
 
@@ -317,18 +349,41 @@ impl LlmClient for HttpLlmClient {
                 .map_err(|e| RideError::Agent(format!("JSON parse error: {e}")))?;
 
             let content = match self.provider {
-                ProviderType::Ollama => json
-                    .pointer("/message/content")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default(),
-                _ => json
-                    .pointer("/choices/0/message/content")
-                    .or_else(|| json.pointer("/choices/0/text"))
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default(),
+                ProviderType::Ollama => {
+                    if let Some(content_str) = json.pointer("/message/content").and_then(serde_json::Value::as_str) {
+                        if !content_str.is_empty() {
+                            content_str.to_string()
+                        } else if let Some(tool_calls) = json.pointer("/message/tool_calls") {
+                            serde_json::json!({ "tool_calls": tool_calls }).to_string()
+                        } else {
+                            String::new()
+                        }
+                    } else if let Some(tool_calls) = json.pointer("/message/tool_calls") {
+                        serde_json::json!({ "tool_calls": tool_calls }).to_string()
+                    } else {
+                        String::new()
+                    }
+                }
+                _ => {
+                    let c_opt = json
+                        .pointer("/choices/0/message/content")
+                        .or_else(|| json.pointer("/choices/0/text"))
+                        .and_then(serde_json::Value::as_str);
+
+                    match c_opt {
+                        Some(s) if !s.is_empty() => s.to_string(),
+                        _ => {
+                            if let Some(tool_calls) = json.pointer("/choices/0/message/tool_calls") {
+                                serde_json::json!({ "tool_calls": tool_calls }).to_string()
+                            } else {
+                                c_opt.unwrap_or_default().to_string()
+                            }
+                        }
+                    }
+                }
             };
 
-            Ok(content.to_string())
+            Ok(content)
         })
     }
 }
@@ -481,6 +536,10 @@ impl AgentSession {
     }
 
     pub fn with_event_sender(mut self, event_tx: tokio::sync::broadcast::Sender<AgentEvent>) -> Self {
+        self.approval_gate = Arc::new(
+            TerminalApprovalGate::new(self.config.approval_policy)
+                .with_event_sender(event_tx.clone()),
+        );
         self.event_tx = Some(event_tx);
         self
     }
@@ -646,6 +705,21 @@ impl AgentSession {
 
             // Execute each requested tool call
             for call in tool_calls {
+                if cancel.is_cancelled() {
+                    if let Some(tx) = &self.event_tx {
+                        let _ = tx.send(AgentEvent::TurnCancelled);
+                    }
+                    return Ok(AgentTurnResult {
+                        turn_count: loop_count,
+                        final_response: "Execution cancelled by user.".into(),
+                        executed_tools,
+                        diffs,
+                        completed: false,
+                        hit_turn_limit: false,
+                        cancelled: true,
+                    });
+                }
+
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.send(AgentEvent::ToolCallRequested {
                         tool_name: call.name.clone(),
@@ -665,6 +739,8 @@ impl AgentSession {
                     &self.config.tool_budget,
                 )
                 .await;
+
+                tokio::task::yield_now().await;
 
                 if let Some(diff) = &outcome.diff {
                     if let Some(tx) = &self.event_tx {
@@ -866,5 +942,99 @@ mod tests {
         assert_eq!(result.executed_tools.len(), 1);
         assert!(!result.executed_tools[0].success);
         assert!(result.executed_tools[0].output.contains("denied by Deny policy"));
+    }
+
+    #[test]
+    fn test_sliding_window_prunes_conversation_history() {
+        let mut history = ConversationHistory::new();
+        history.insert_or_update_system("System instructions");
+
+        // Add 20 turns of messages
+        for i in 1..=20 {
+            history.push(ChatMessage::user(format!("Question {i} with lots of context details... {}", "x".repeat(100))));
+            history.push(ChatMessage::assistant(format!("Answer {i} with code snippets... {}", "y".repeat(100))));
+        }
+
+        let initial_tokens = history.estimate_token_count();
+        assert!(initial_tokens > 500);
+
+        // Prune with a tight 200 token budget
+        history.prune_if_exceeds(200);
+
+        let pruned_tokens = history.estimate_token_count();
+        assert!(pruned_tokens <= 200 || history.messages().len() <= 2);
+        // System prompt at index 0 must ALWAYS be preserved
+        assert_eq!(history.messages()[0].role, ChatRole::System);
+        assert_eq!(history.messages()[0].content, "System instructions");
+    }
+
+    #[tokio::test]
+    async fn test_cancellation_during_multi_tool_execution() {
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(16);
+
+        // Cancel token deterministically as soon as the first tool starts executing
+        tokio::spawn(async move {
+            while let Ok(evt) = event_rx.recv().await {
+                if let AgentEvent::ToolExecutionStarted { tool_name } = evt {
+                    if tool_name == "list_dir" {
+                        cancel_clone.cancel();
+                        break;
+                    }
+                }
+            }
+        });
+
+        let tmp_dir = std::env::temp_dir().join("ride_cancel_test");
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        let _ = std::fs::create_dir_all(&tmp_dir);
+
+        // Model returns two tool calls
+        let responses = vec![
+            "<tool_call name=\"list_dir\"><path>.</path></tool_call>\n<tool_call name=\"write_file\"><path>should_not_write.txt</path><content>data</content></tool_call>".into(),
+        ];
+
+        let mock_client = Arc::new(MockLlmClient::new_with_queue(responses));
+        let config = AgentSessionConfig {
+            working_dir: Some(tmp_dir.clone()),
+            ..Default::default()
+        };
+        let mut session = AgentSession::new(config, mock_client).with_event_sender(event_tx);
+
+        let result = session.execute_turn("List and write", cancel).await.unwrap();
+        assert!(result.cancelled);
+        assert_eq!(result.executed_tools.len(), 1);
+        assert_eq!(result.executed_tools[0].call.name, "list_dir");
+        assert!(!tmp_dir.join("should_not_write.txt").exists());
+
+        let _ = std::fs::remove_dir_all(tmp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_multi_turn_conversation_context_retention() {
+        let responses = vec![
+            "Turn 1 response: I know about project X.".into(),
+            "Turn 2 response: Yes, we were discussing project X.".into(),
+        ];
+
+        let mock_client = Arc::new(MockLlmClient::new_with_queue(responses));
+        let config = AgentSessionConfig::default();
+        let mut session = AgentSession::new(config, mock_client);
+
+        let r1 = session.execute_turn("Let's talk about project X", CancellationToken::new()).await.unwrap();
+        assert!(r1.completed);
+
+        let r2 = session.execute_turn("What were we talking about?", CancellationToken::new()).await.unwrap();
+        assert!(r2.completed);
+
+        // History now has: System, User1, Assistant1, User2, Assistant2
+        let history = session.history();
+        assert_eq!(history.len(), 5);
+        assert_eq!(history[1].role, ChatRole::User);
+        assert!(history[1].content.contains("project X"));
+        assert_eq!(history[3].role, ChatRole::User);
+        assert!(history[3].content.contains("talking about"));
     }
 }
