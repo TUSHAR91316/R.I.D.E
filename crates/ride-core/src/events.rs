@@ -62,6 +62,62 @@ pub fn new_event_bus() -> (
     tokio::sync::broadcast::channel(EVENT_BUS_CAPACITY)
 }
 
+/// Real-time agent execution events broadcast across desktop UI, terminal, and agent tabs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum AgentEvent {
+    SessionStarted {
+        session_id: String,
+    },
+    TurnStarted {
+        turn_index: usize,
+        max_turns: usize,
+    },
+    ThinkingDelta {
+        delta: String,
+    },
+    ToolCallRequested {
+        tool_name: String,
+        arguments: serde_json::Value,
+    },
+    ApprovalRequired {
+        request_id: String,
+        command: String,
+        safety_level: String,
+    },
+    ApprovalResponded {
+        request_id: String,
+        approved: bool,
+    },
+    ToolExecutionStarted {
+        tool_name: String,
+    },
+    ToolExecuted {
+        tool_name: String,
+        success: bool,
+        output_preview: String,
+    },
+    DiffGenerated {
+        path: String,
+        diff: String,
+    },
+    TurnCompleted {
+        turn_index: usize,
+        response: String,
+    },
+    TurnCancelled,
+    TurnError {
+        error: String,
+    },
+}
+
+/// Create a new agent event bus (sender + first receiver).
+pub fn new_agent_event_bus() -> (
+    tokio::sync::broadcast::Sender<AgentEvent>,
+    tokio::sync::broadcast::Receiver<AgentEvent>,
+) {
+    tokio::sync::broadcast::channel(EVENT_BUS_CAPACITY)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,5 +181,23 @@ mod tests {
         } else {
             panic!("wrong event variant");
         }
+    }
+
+    #[tokio::test]
+    async fn test_agent_event_bus_roundtrip() {
+        let (tx, mut rx) = new_agent_event_bus();
+        tx.send(AgentEvent::TurnStarted {
+            turn_index: 1,
+            max_turns: 10,
+        })
+        .unwrap();
+        let ev = rx.recv().await.unwrap();
+        assert_eq!(
+            ev,
+            AgentEvent::TurnStarted {
+                turn_index: 1,
+                max_turns: 10
+            }
+        );
     }
 }

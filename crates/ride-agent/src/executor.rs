@@ -1,7 +1,19 @@
+use crate::approval::TerminalApprovalGate;
+use crate::budget::{ToolOutputBudget, ToolOutputBudgeter};
+use crate::diff::{BackupSnapshot, DiffManager, UnifiedDiff};
 use crate::parser::ParsedToolCall;
 use crate::tools::{ToolResult, Toolset};
 use ride_skills::{DynamicToolRegistry, PromptSynthesisResult, SkillManifest, SystemPromptBuilder};
 use std::path::Path;
+
+/// Outcome of a tool execution including potential diffs and backup snapshots.
+#[derive(Debug, Clone)]
+pub struct ToolExecutionOutcome {
+    pub success: bool,
+    pub output: String,
+    pub diff: Option<UnifiedDiff>,
+    pub snapshot: Option<BackupSnapshot>,
+}
 
 pub struct AgentExecutor;
 
@@ -212,6 +224,281 @@ impl AgentExecutor {
                 ToolResult {
                     success: false,
                     output: format!("Unknown tool: {}", custom_name),
+                }
+            }
+        }
+    }
+
+    /// Executes tool call with full security approval gate, diff tracking, and output context budgeting.
+    pub async fn execute_tool_full(
+        call: &ParsedToolCall,
+        dynamic_tools: Option<&DynamicToolRegistry>,
+        working_dir: Option<&Path>,
+        approval_gate: Option<&TerminalApprovalGate>,
+        diff_manager: Option<&DiffManager>,
+        budget: &ToolOutputBudget,
+    ) -> ToolExecutionOutcome {
+        match call.name.as_str() {
+            "read_file" => {
+                let path = call.arguments["path"].as_str().unwrap_or_default();
+                let start = call.arguments["start_line"].as_u64().map(|v| v as usize);
+                let end = call.arguments["end_line"].as_u64().map(|v| v as usize);
+                let resolved_path = match working_dir {
+                    Some(dir) if !Path::new(path).is_absolute() => dir.join(path),
+                    _ => Path::new(path).to_path_buf(),
+                };
+                match Toolset::read_file_budgeted(&resolved_path, start, end, budget.max_file_read_lines) {
+                    Ok(out) => {
+                        let budgeted = ToolOutputBudgeter::truncate(&out, budget);
+                        ToolExecutionOutcome {
+                            success: true,
+                            output: budgeted,
+                            diff: None,
+                            snapshot: None,
+                        }
+                    }
+                    Err(e) => ToolExecutionOutcome {
+                        success: false,
+                        output: e.to_string(),
+                        diff: None,
+                        snapshot: None,
+                    },
+                }
+            }
+            "write_file" => {
+                let path = call.arguments["path"].as_str().unwrap_or_default();
+                let content = call.arguments["content"].as_str().unwrap_or_default();
+                let resolved_path = match working_dir {
+                    Some(dir) if !Path::new(path).is_absolute() => dir.join(path),
+                    _ => Path::new(path).to_path_buf(),
+                };
+
+                if let Some(dm) = diff_manager {
+                    match dm.apply_write_with_backup(&resolved_path, content) {
+                        Ok((diff, snap)) => ToolExecutionOutcome {
+                            success: true,
+                            output: format!(
+                                "Successfully wrote {} ({} additions, {} deletions)",
+                                path, diff.additions, diff.deletions
+                            ),
+                            diff: Some(diff),
+                            snapshot: Some(snap),
+                        },
+                        Err(e) => ToolExecutionOutcome {
+                            success: false,
+                            output: e.to_string(),
+                            diff: None,
+                            snapshot: None,
+                        },
+                    }
+                } else {
+                    match Toolset::write_file(&resolved_path, content) {
+                        Ok(_) => ToolExecutionOutcome {
+                            success: true,
+                            output: format!("Successfully wrote {path}"),
+                            diff: None,
+                            snapshot: None,
+                        },
+                        Err(e) => ToolExecutionOutcome {
+                            success: false,
+                            output: e.to_string(),
+                            diff: None,
+                            snapshot: None,
+                        },
+                    }
+                }
+            }
+            "edit_file" => {
+                let path = call.arguments["path"].as_str().unwrap_or_default();
+                let target = call.arguments["target"].as_str().unwrap_or_default();
+                let replacement = call.arguments["replacement"].as_str().unwrap_or_default();
+                let resolved_path = match working_dir {
+                    Some(dir) if !Path::new(path).is_absolute() => dir.join(path),
+                    _ => Path::new(path).to_path_buf(),
+                };
+
+                if let Some(dm) = diff_manager {
+                    match dm.apply_edit_with_backup(&resolved_path, target, replacement) {
+                        Ok((diff, snap)) => ToolExecutionOutcome {
+                            success: true,
+                            output: format!(
+                                "Successfully edited {} ({} additions, {} deletions)",
+                                path, diff.additions, diff.deletions
+                            ),
+                            diff: Some(diff),
+                            snapshot: Some(snap),
+                        },
+                        Err(e) => ToolExecutionOutcome {
+                            success: false,
+                            output: e.to_string(),
+                            diff: None,
+                            snapshot: None,
+                        },
+                    }
+                } else {
+                    match Toolset::edit_file(&resolved_path, target, replacement) {
+                        Ok(_) => ToolExecutionOutcome {
+                            success: true,
+                            output: format!("Successfully edited {path}"),
+                            diff: None,
+                            snapshot: None,
+                        },
+                        Err(e) => ToolExecutionOutcome {
+                            success: false,
+                            output: e.to_string(),
+                            diff: None,
+                            snapshot: None,
+                        },
+                    }
+                }
+            }
+            "list_dir" => {
+                let path = call.arguments["path"].as_str().unwrap_or(".");
+                let resolved_path = match working_dir {
+                    Some(dir) if !Path::new(path).is_absolute() => dir.join(path),
+                    _ => Path::new(path).to_path_buf(),
+                };
+                match Toolset::list_dir_budgeted(&resolved_path, budget.max_dir_entries) {
+                    Ok(entries) => {
+                        let lines: Vec<String> = entries
+                            .into_iter()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .collect();
+                        let raw = lines.join("\n");
+                        let budgeted = ToolOutputBudgeter::truncate(&raw, budget);
+                        ToolExecutionOutcome {
+                            success: true,
+                            output: budgeted,
+                            diff: None,
+                            snapshot: None,
+                        }
+                    }
+                    Err(e) => ToolExecutionOutcome {
+                        success: false,
+                        output: e.to_string(),
+                        diff: None,
+                        snapshot: None,
+                    },
+                }
+            }
+            "search_code" => {
+                let dir = call.arguments["path"]
+                    .as_str()
+                    .or_else(|| call.arguments["dir"].as_str())
+                    .unwrap_or(".");
+                let query = call.arguments["query"].as_str().unwrap_or_default();
+                let case_sensitive = call.arguments["case_sensitive"].as_bool().unwrap_or(false);
+                let resolved_path = match working_dir {
+                    Some(d) if !Path::new(dir).is_absolute() => d.join(dir),
+                    _ => Path::new(dir).to_path_buf(),
+                };
+                match Toolset::search_code_budgeted(
+                    &resolved_path,
+                    query,
+                    case_sensitive,
+                    budget.max_search_matches,
+                ) {
+                    Ok(matches) => {
+                        let lines: Vec<String> = matches
+                            .into_iter()
+                            .map(|m| {
+                                format!("{}:{}: {}", m.file.display(), m.line_number, m.line_text)
+                            })
+                            .collect();
+                        let raw = lines.join("\n");
+                        let budgeted = ToolOutputBudgeter::truncate(&raw, budget);
+                        ToolExecutionOutcome {
+                            success: true,
+                            output: budgeted,
+                            diff: None,
+                            snapshot: None,
+                        }
+                    }
+                    Err(e) => ToolExecutionOutcome {
+                        success: false,
+                        output: e.to_string(),
+                        diff: None,
+                        snapshot: None,
+                    },
+                }
+            }
+            "run_command" => {
+                let cmd = call.arguments["cmd"]
+                    .as_str()
+                    .or_else(|| call.arguments["command"].as_str())
+                    .unwrap_or_default();
+
+                // Check security approval gate
+                if let Some(gate) = approval_gate {
+                    if let Err(e) = gate.check_approval(cmd, working_dir).await {
+                        return ToolExecutionOutcome {
+                            success: false,
+                            output: e.to_string(),
+                            diff: None,
+                            snapshot: None,
+                        };
+                    }
+                }
+
+                match Toolset::run_command(cmd, working_dir) {
+                    Ok(out) => {
+                        let combined = if !out.stderr.is_empty() {
+                            format!("{}\n[stderr]: {}", out.stdout, out.stderr)
+                        } else {
+                            out.stdout
+                        };
+                        let budgeted = ToolOutputBudgeter::truncate(&combined, budget);
+                        ToolExecutionOutcome {
+                            success: out.exit_code == 0,
+                            output: budgeted,
+                            diff: None,
+                            snapshot: None,
+                        }
+                    }
+                    Err(e) => ToolExecutionOutcome {
+                        success: false,
+                        output: e.to_string(),
+                        diff: None,
+                        snapshot: None,
+                    },
+                }
+            }
+            custom_name => {
+                if let Some(registry) = dynamic_tools {
+                    if let Some(tool) = registry.get(custom_name) {
+                        return match tool.execute_sync(&call.arguments, working_dir) {
+                            Ok(out) => {
+                                let combined = if !out.stderr.is_empty() {
+                                    format!("{}\n[stderr]: {}", out.stdout, out.stderr)
+                                } else {
+                                    out.stdout
+                                };
+                                let budgeted = ToolOutputBudgeter::truncate(&combined, budget);
+                                ToolExecutionOutcome {
+                                    success: out.exit_code == 0,
+                                    output: budgeted,
+                                    diff: None,
+                                    snapshot: None,
+                                }
+                            }
+                            Err(e) => ToolExecutionOutcome {
+                                success: false,
+                                output: format!(
+                                    "Dynamic tool '{}' execution error: {e}",
+                                    custom_name
+                                ),
+                                diff: None,
+                                snapshot: None,
+                            },
+                        };
+                    }
+                }
+
+                ToolExecutionOutcome {
+                    success: false,
+                    output: format!("Unknown tool: {}", custom_name),
+                    diff: None,
+                    snapshot: None,
                 }
             }
         }

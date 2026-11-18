@@ -900,11 +900,16 @@ dependencies = [
 name = "ride-agent"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "futures-util",
+ "reqwest",
  "ride-core",
+ "ride-discovery",
  "ride-skills",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

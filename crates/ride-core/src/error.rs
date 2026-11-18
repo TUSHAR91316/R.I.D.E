@@ -23,6 +23,9 @@ pub enum RideError {
     #[error("Agent tool error: {0}")]
     Agent(String),
 
+    #[error("Operation cancelled")]
+    Cancelled,
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

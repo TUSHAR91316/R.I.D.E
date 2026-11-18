@@ -26,6 +26,15 @@ pub struct Toolset;
 
 impl Toolset {
     pub fn read_file(path: impl AsRef<Path>, start_line: Option<usize>, end_line: Option<usize>) -> Result<String> {
+        Self::read_file_budgeted(path, start_line, end_line, 300)
+    }
+
+    pub fn read_file_budgeted(
+        path: impl AsRef<Path>,
+        start_line: Option<usize>,
+        end_line: Option<usize>,
+        max_lines_limit: usize,
+    ) -> Result<String> {
         let content = std::fs::read_to_string(path.as_ref())
             .map_err(|e| RideError::Agent(format!("Cannot read file: {e}")))?;
 
@@ -34,15 +43,40 @@ impl Toolset {
             return Ok(String::new());
         }
 
-        let start = start_line.unwrap_or(1).saturating_sub(1);
-        let end = end_line.unwrap_or(lines.len()).min(lines.len());
+        let total_file_lines = lines.len();
+        let (start, end, was_capped) = match (start_line, end_line) {
+            (Some(s), Some(e)) => (s.saturating_sub(1), e.min(total_file_lines), false),
+            (Some(s), None) => {
+                let start_idx = s.saturating_sub(1);
+                let end_idx = (start_idx + max_lines_limit).min(total_file_lines);
+                let capped = total_file_lines > start_idx + max_lines_limit;
+                (start_idx, end_idx, capped)
+            }
+            (None, Some(e)) => (0, e.min(total_file_lines), false),
+            (None, None) => {
+                if total_file_lines > max_lines_limit {
+                    (0, max_lines_limit, true)
+                } else {
+                    (0, total_file_lines, false)
+                }
+            }
+        };
 
-        if start >= lines.len() || start >= end {
+        if start >= total_file_lines || start >= end {
             return Ok(String::new());
         }
 
         let slice = &lines[start..end];
-        Ok(slice.join("\n"))
+        let mut result = slice.join("\n");
+        if was_capped {
+            result.push_str(&format!(
+                "\n\n[File has {total_file_lines} lines. Showing lines {}-{} (capped at {max_lines_limit} lines). Specify start_line and end_line parameters to read other sections.]",
+                start + 1,
+                end
+            ));
+        }
+
+        Ok(result)
     }
 
     pub fn write_file(path: impl AsRef<Path>, content: &str) -> Result<()> {
@@ -90,6 +124,10 @@ impl Toolset {
     }
 
     pub fn list_dir(path: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
+        Self::list_dir_budgeted(path, 100)
+    }
+
+    pub fn list_dir_budgeted(path: impl AsRef<Path>, max_entries: usize) -> Result<Vec<PathBuf>> {
         let path = path.as_ref();
         let mut entries = Vec::new();
         for entry in std::fs::read_dir(path)? {
@@ -97,10 +135,22 @@ impl Toolset {
             entries.push(entry.path());
         }
         entries.sort();
+        if entries.len() > max_entries {
+            entries.truncate(max_entries);
+        }
         Ok(entries)
     }
 
     pub fn search_code(dir: impl AsRef<Path>, query: &str, case_sensitive: bool) -> Result<Vec<SearchMatch>> {
+        Self::search_code_budgeted(dir, query, case_sensitive, 50)
+    }
+
+    pub fn search_code_budgeted(
+        dir: impl AsRef<Path>,
+        query: &str,
+        case_sensitive: bool,
+        max_matches: usize,
+    ) -> Result<Vec<SearchMatch>> {
         let dir = dir.as_ref();
         let mut matches = Vec::new();
         let query_normalized = if case_sensitive {
@@ -109,7 +159,7 @@ impl Toolset {
             query.to_lowercase()
         };
 
-        Self::search_dir_recursive(dir, &query_normalized, case_sensitive, &mut matches)?;
+        Self::search_dir_recursive(dir, &query_normalized, case_sensitive, &mut matches, max_matches)?;
         Ok(matches)
     }
 
@@ -118,7 +168,11 @@ impl Toolset {
         query: &str,
         case_sensitive: bool,
         matches: &mut Vec<SearchMatch>,
+        max_matches: usize,
     ) -> Result<()> {
+        if matches.len() >= max_matches {
+            return Ok(());
+        }
         if !dir.exists() || !dir.is_dir() {
             return Ok(());
         }
@@ -129,6 +183,9 @@ impl Toolset {
         };
 
         for entry in entries.flatten() {
+            if matches.len() >= max_matches {
+                break;
+            }
             let path = entry.path();
             let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if file_name.starts_with('.') || file_name == "target" || file_name == "node_modules" {
@@ -136,10 +193,13 @@ impl Toolset {
             }
 
             if path.is_dir() {
-                let _ = Self::search_dir_recursive(&path, query, case_sensitive, matches);
+                let _ = Self::search_dir_recursive(&path, query, case_sensitive, matches, max_matches);
             } else if path.is_file() {
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     for (line_idx, line) in content.lines().enumerate() {
+                        if matches.len() >= max_matches {
+                            break;
+                        }
                         let matched = if case_sensitive {
                             line.contains(query)
                         } else {
@@ -230,5 +290,20 @@ mod tests {
         let out = Toolset::run_command("Write-Output 'ride_agent_ok'", None).unwrap();
         assert_eq!(out.exit_code, 0);
         assert!(out.stdout.contains("ride_agent_ok"));
+    }
+
+    #[test]
+    fn test_read_file_budgeted_caps_large_file() {
+        let tmp = std::env::temp_dir().join("ride_large_test.txt");
+        let content = (1..=500).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        Toolset::write_file(&tmp, &content).unwrap();
+
+        // Reading without explicit bounds should cap at 300 lines
+        let read = Toolset::read_file(&tmp, None, None).unwrap();
+        assert!(read.contains("line 300"));
+        assert!(!read.contains("line 301\n"));
+        assert!(read.contains("[File has 500 lines. Showing lines 1-300"));
+
+        let _ = std::fs::remove_file(tmp);
     }
 }
