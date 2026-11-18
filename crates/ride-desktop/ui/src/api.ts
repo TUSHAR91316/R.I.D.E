@@ -69,6 +69,27 @@ export async function getMoeStatus(): Promise<MoeEngineStatus> {
   return callInvoke<MoeEngineStatus>('get_moe_status');
 }
 
+export async function saveFile(path: string, content: string): Promise<string> {
+  return callInvoke<string>('save_file', { path, content });
+}
+
+export async function readFile(path: string): Promise<string> {
+  return callInvoke<string>('read_file', { path });
+}
+
+export async function onModelEvent(callback: (event: any) => void): Promise<() => void> {
+  if (isTauri()) {
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      const unlisten = await listen('model://event', (e) => callback(e.payload));
+      return unlisten;
+    } catch (err) {
+      console.warn('[Tauri Model Event Listener Error]:', err);
+    }
+  }
+  return () => {};
+}
+
 export async function onAgentEvent(callback: (event: any) => void): Promise<() => void> {
   if (isTauri()) {
     try {
@@ -193,6 +214,15 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, any>): Promise<T
         disk_read_mbs: 1240.5,
         ram_resident_mb: 48,
       } as unknown as T;
+
+    case 'save_file': {
+      console.log(`[Mock Save] ${args?.path} (${(args?.content as string)?.length || 0} bytes)`);
+      return `Saved ${args?.path}` as unknown as T;
+    }
+
+    case 'read_file': {
+      return `// Mock file content for ${args?.path}\n` as unknown as T;
+    }
 
     case 'send_agent_message': {
       const text = args?.message || '';

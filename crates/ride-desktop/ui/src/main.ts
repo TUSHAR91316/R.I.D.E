@@ -22,7 +22,7 @@ class RideApplication {
     diffs: [],
     messages: [],
     currentModel: 'qwen2.5-coder:7b',
-    currentProvider: 'Ollama',
+    currentProvider: 'Offline',
     tokensPerSec: 0,
     ramUsageMb: 42, // Target native WebView2 footprint (<60MB)
     isStreaming: false,
@@ -40,6 +40,7 @@ class RideApplication {
   private vscodeLayout!: VsCodeLayout;
   private claudeLayout!: ClaudeCodeLayout;
   private codexLayout!: CodexLayout;
+  private toastElement: HTMLElement | null = null;
 
   constructor() {
     const root = document.getElementById('app');
@@ -54,7 +55,9 @@ class RideApplication {
 
   private async init(): Promise<void> {
     // 1. Initialize components
-    this.editor = new EditorComponent();
+    this.editor = new EditorComponent((path) => {
+      this.showSaveToast(path);
+    });
 
     this.chat = new AgentChat(async (msg) => this.handleSendMessage(msg));
 
@@ -109,8 +112,13 @@ class RideApplication {
     // 6. Register global shortcuts
     this.registerShortcuts();
 
-    // 7. Subscribe to background events
+    // 7. Subscribe to background events and polling
     this.subscribeEvents();
+
+    // 8. Start recurring model discovery ping (every 3s)
+    setInterval(() => {
+      void this.refreshModelStatus();
+    }, 3000);
   }
 
   private async loadInitialData(): Promise<void> {
@@ -131,11 +139,37 @@ class RideApplication {
       if (onlineProvider && onlineProvider.models.length > 0) {
         this.state.currentProvider = onlineProvider.provider;
         this.state.currentModel = onlineProvider.models[0].name || onlineProvider.models[0].id;
+      } else {
+        this.state.currentProvider = onlineProvider ? onlineProvider.provider : 'Offline';
       }
 
       this.updateAllComponents();
     } catch (err) {
       console.error('Failed to load initial R.I.D.E state:', err);
+    }
+  }
+
+  public async refreshModelStatus(): Promise<void> {
+    try {
+      const providers = await api.getModelStatus();
+      this.state.providers = providers;
+
+      const onlineProvider = providers.find((p) => p.is_online);
+      if (onlineProvider && onlineProvider.models.length > 0) {
+        this.state.currentProvider = onlineProvider.provider;
+        const modelStillAvailable = onlineProvider.models.some(
+          (m) => m.name === this.state.currentModel || m.id === this.state.currentModel
+        );
+        if (!modelStillAvailable) {
+          this.state.currentModel = onlineProvider.models[0].name || onlineProvider.models[0].id;
+        }
+      } else if (!onlineProvider) {
+        this.state.currentProvider = 'Offline';
+      }
+
+      this.updateAllComponents();
+    } catch (err) {
+      console.debug('[Model Status Ping] Offline or waiting:', err);
     }
   }
 
@@ -261,7 +295,10 @@ class RideApplication {
     window.addEventListener('keydown', (e: KeyboardEvent) => {
       const isCmdOrCtrl = e.metaKey || e.ctrlKey;
 
-      if (isCmdOrCtrl && e.key.toLowerCase() === 'k') {
+      if (isCmdOrCtrl && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        void this.editor.saveActiveFile();
+      } else if (isCmdOrCtrl && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         this.commandPalette.toggle();
       } else if (isCmdOrCtrl && e.key === '1') {
@@ -277,7 +314,30 @@ class RideApplication {
     });
   }
 
+  private showSaveToast(path: string): void {
+    if (!this.toastElement) {
+      this.toastElement = document.createElement('div');
+      this.toastElement.className = 'ride-toast';
+      document.body.appendChild(this.toastElement);
+    }
+
+    const fileName = path.split(/[\/\\]/).pop() || path;
+    this.toastElement.innerHTML = `<span class="toast-icon">💾</span> File saved: <strong>${fileName}</strong>`;
+    this.toastElement.classList.add('visible');
+
+    setTimeout(() => {
+      this.toastElement?.classList.remove('visible');
+    }, 2200);
+  }
+
   private subscribeEvents(): void {
+    // 1. Subscribe to model discovery events
+    api.onModelEvent((event) => {
+      console.log('[Model Event]:', event);
+      void this.refreshModelStatus();
+    });
+
+    // 2. Subscribe to agent execution events
     api.onAgentEvent((event) => {
       console.log('[Agent Event]:', event);
       const lastMsg = this.state.messages[this.state.messages.length - 1];

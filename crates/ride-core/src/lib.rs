@@ -20,7 +20,7 @@ mod tests {
 
     #[test]
     fn test_version_and_name() {
-        assert_eq!(RIDE_VERSION, "0.1.0");
+        assert_eq!(RIDE_VERSION, "1.0.1");
         assert!(RIDE_APP_NAME.contains("R.I.D.E"));
     }
 

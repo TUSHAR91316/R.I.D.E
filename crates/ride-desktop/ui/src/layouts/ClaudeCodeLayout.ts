@@ -113,7 +113,7 @@ export class ClaudeCodeLayout {
 ██╔══██╗    ██║    ██║  ██║    ██╔══╝  
 ██║  ██║    ██║    ██████╔╝    ███████╗
           </pre>
-          <div class="welcome-line"><strong>R.I.D.E Claude Code Terminal Interface</strong> v0.1.0</div>
+          <div class="welcome-line"><strong>R.I.D.E Claude Code Terminal Interface</strong> v1.0.1</div>
           <div class="welcome-line dim">Autonomous agent loop with local MoE routing & safety approval gate.</div>
           <div class="welcome-line dim">Type <span class="highlight">/help</span>, <span class="highlight">/diff</span>, or any coding prompt to begin.</div>
           <div class="welcome-suggestions">

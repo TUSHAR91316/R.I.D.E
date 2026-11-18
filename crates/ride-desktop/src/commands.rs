@@ -391,6 +391,25 @@ pub fn get_moe_status(state: State<Mutex<DesktopState>>) -> Result<MoeEngineStat
     Ok(st.moe_manager.status().clone())
 }
 
+/// Save file content to disk. Creates parent directories if necessary.
+#[tauri::command]
+pub async fn save_file(path: String, content: String) -> Result<String, String> {
+    let p = std::path::Path::new(&path);
+    if let Some(parent) = p.parent() {
+        if !parent.as_os_str().is_empty() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    std::fs::write(&path, &content).map_err(|e| format!("Failed to save '{}': {}", path, e))?;
+    Ok(format!("Saved {}", path))
+}
+
+/// Read file content from disk.
+#[tauri::command]
+pub async fn read_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("Failed to read '{}': {}", path, e))
+}
+
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -708,5 +727,33 @@ pub mod tests {
         let status = st.moe_manager.status();
         assert!(!status.is_running);
         assert_eq!(status.streamed_experts_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_save_and_read_file_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ride_test_save_read_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let file_path = temp_dir.join("subfolder").join("hello.rs");
+        let path_str = file_path.to_string_lossy().to_string();
+
+        let code = "fn main() {\n    println!(\"Hello R.I.D.E\");\n}\n";
+        let save_res = save_file(path_str.clone(), code.to_string()).await;
+        assert!(save_res.is_ok());
+
+        let read_res = read_file(path_str.clone()).await;
+        assert!(read_res.is_ok());
+        assert_eq!(read_res.unwrap(), code);
+
+        // Read non-existent file
+        let read_missing = read_file(temp_dir.join("nonexistent.txt").to_string_lossy().to_string()).await;
+        assert!(read_missing.is_err());
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

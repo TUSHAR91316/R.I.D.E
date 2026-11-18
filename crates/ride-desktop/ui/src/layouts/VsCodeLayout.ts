@@ -166,15 +166,27 @@ export class VsCodeLayout {
             <div class="tree-item indent-2">📁 ride-skills</div>
             <div class="tree-item indent-2">📁 ride-agent</div>
             <div class="tree-item indent-2 open">▾ 📁 ride-desktop</div>
-            <div class="tree-item indent-3 file active">🦀 main.rs</div>
-            <div class="tree-item indent-3 file">🦀 commands.rs</div>
-            <div class="tree-item indent-3 file">⚙️ Cargo.toml</div>
-            <div class="tree-item indent-3 file">⚙️ tauri.conf.json</div>
-            <div class="tree-item indent-1 file">📄 README.md</div>
-            <div class="tree-item indent-1 file">⚙️ Cargo.toml</div>
+            <div class="tree-item indent-3 file active" data-path="crates/ride-desktop/src/main.rs">🦀 main.rs</div>
+            <div class="tree-item indent-3 file" data-path="crates/ride-desktop/src/commands.rs">🦀 commands.rs</div>
+            <div class="tree-item indent-3 file" data-path="crates/ride-desktop/Cargo.toml">⚙️ Cargo.toml</div>
+            <div class="tree-item indent-3 file" data-path="crates/ride-desktop/tauri.conf.json">⚙️ tauri.conf.json</div>
+            <div class="tree-item indent-1 file" data-path="README.md">📄 README.md</div>
+            <div class="tree-item indent-1 file" data-path="Cargo.toml">⚙️ Cargo.toml</div>
           </div>
         </div>
       `;
+
+      // Attach file click handler
+      sidebarContent.querySelectorAll<HTMLElement>('.tree-item.file[data-path]').forEach((item) => {
+        item.addEventListener('click', () => {
+          const path = item.getAttribute('data-path');
+          if (path) {
+            sidebarContent.querySelectorAll('.tree-item.file').forEach((f) => f.classList.remove('active'));
+            item.classList.add('active');
+            void this.editor.openFile(path);
+          }
+        });
+      });
     } else if (this.activeActivity === 'search') {
       sidebarTitle.innerText = 'SEARCH WORKSPACE';
       sidebarContent.innerHTML = `
