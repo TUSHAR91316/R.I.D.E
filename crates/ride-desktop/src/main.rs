@@ -1,41 +1,36 @@
-use ride_agent::AgentExecutor;
-use ride_core::{RideConfig, RIDE_APP_NAME, RIDE_VERSION};
-use ride_discovery::ModelDetector;
-use ride_moe::MoeEngineManager;
-use ride_skills::SkillRegistry;
+// Prevents an additional console window from opening on Windows release builds.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod commands;
+
+use commands::DesktopState;
+use std::sync::Mutex;
 use tracing::info;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
     tracing_subscriber::fmt::init();
 
-    info!("Starting {} v{}", RIDE_APP_NAME, RIDE_VERSION);
+    info!(
+        "Starting {} v{}",
+        ride_core::RIDE_APP_NAME,
+        ride_core::RIDE_VERSION
+    );
 
-    let config = RideConfig::default();
-    info!("Active UI Layout: {:?}", config.active_layout);
-    info!("RAM optimization limit: {} MB", config.memory_limits.max_editor_ram_mb);
-
-    let detector = ModelDetector::default();
-    let statuses = detector.scan_all().await;
-    let online_count = statuses.iter().filter(|s| s.is_online).count();
-    info!("Local model discovery scanned {} endpoints. Online: {}", statuses.len(), online_count);
-
-    let models = detector.discover_all_models().await;
-    info!("Discovered {} local models across all providers", models.len());
-    for m in &models {
-        info!("  - [{:?}] {} (MoE: {}, ctx: {:?})", m.provider, m.id, m.is_moe, m.context_length);
-    }
-
-    let moe_manager = MoeEngineManager::new(Default::default());
-    info!("MoE engine integration ready on port {}", moe_manager.config().port);
-
-    let mut skills = SkillRegistry::new();
-    let loaded = skills.load_from_dir(&config.skills_dir)?;
-    info!("Loaded {} skills from {:?}", loaded, config.skills_dir);
-
-    let skill_prompt = AgentExecutor::build_skills_prompt(&skills.list());
-    info!("Agent prompt buffer initialized ({} bytes)", skill_prompt.len());
-
-    info!("R.I.D.E desktop core initialized successfully.");
-    Ok(())
+    tauri::Builder::default()
+        .manage(Mutex::new(DesktopState::default()))
+        .invoke_handler(tauri::generate_handler![
+            commands::get_model_status,
+            commands::send_agent_message,
+            commands::get_active_skills,
+            commands::toggle_skill,
+            commands::get_diff_preview,
+            commands::stage_diff_preview,
+            commands::apply_diff,
+            commands::rollback_diff,
+            commands::get_active_layout,
+            commands::set_active_layout,
+            commands::get_moe_status,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running R.I.D.E desktop application");
 }

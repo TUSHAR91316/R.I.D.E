@@ -395,24 +395,25 @@ impl TerminalApprovalGate {
                 }
 
                 let sub_commands = CommandSafetyClassifier::split_chain_commands(cmd.trim());
-                let whitelist_guard = self.whitelist.read().unwrap();
-
-                // Every single chained sub-command must be either ReadOnly or match a whitelist entry
-                let all_allowed = sub_commands.iter().all(|sub| {
-                    let sub_trimmed = sub.trim();
-                    let sub_safety = CommandSafetyClassifier::classify(sub_trimmed);
-                    if sub_safety == CommandSafetyLevel::ReadOnly {
-                        return true;
-                    }
-                    if sub_safety == CommandSafetyLevel::PotentiallyDestructive {
-                        return false;
-                    }
-                    whitelist_guard.iter().any(|w| {
-                        let wt = w.trim();
-                        sub_trimmed == wt
-                            || sub_trimmed.starts_with(&format!("{wt} "))
+                let all_allowed = {
+                    let whitelist_guard = self.whitelist.read().unwrap();
+                    // Every single chained sub-command must be either ReadOnly or match a whitelist entry
+                    sub_commands.iter().all(|sub| {
+                        let sub_trimmed = sub.trim();
+                        let sub_safety = CommandSafetyClassifier::classify(sub_trimmed);
+                        if sub_safety == CommandSafetyLevel::ReadOnly {
+                            return true;
+                        }
+                        if sub_safety == CommandSafetyLevel::PotentiallyDestructive {
+                            return false;
+                        }
+                        whitelist_guard.iter().any(|w| {
+                            let wt = w.trim();
+                            sub_trimmed == wt
+                                || sub_trimmed.starts_with(&format!("{wt} "))
+                        })
                     })
-                });
+                };
 
                 if all_allowed {
                     Ok(())
