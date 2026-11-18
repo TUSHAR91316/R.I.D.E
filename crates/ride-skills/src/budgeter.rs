@@ -1,4 +1,27 @@
 use crate::manifest::SkillManifest;
+use regex::RegexBuilder;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillSummary {
+    pub name: String,
+    pub description: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetedSkills {
+    /// Skills fully activated with complete instructions included
+    pub activated: Vec<SkillManifest>,
+    /// Inactive or budget-limited skills summarized as 1-line capability descriptions
+    pub summarized: Vec<SkillSummary>,
+    /// Skills omitted entirely due to hard budget overflow or model incompatibility
+    pub omitted: Vec<String>,
+    /// Estimated total tokens consumed by activated skills + summaries
+    pub estimated_tokens: usize,
+    /// Maximum token budget
+    pub max_budget_tokens: usize,
+}
 
 pub struct SkillContextBudgeter {
     max_total_tokens: usize,
@@ -17,41 +40,192 @@ impl SkillContextBudgeter {
         Self { max_total_tokens }
     }
 
+    pub fn max_budget_tokens(&self) -> usize {
+        self.max_total_tokens
+    }
+
     /// Select skills relevant to user input based on triggers and enabled state,
-    /// while staying within max_total_tokens budget (approx 4 chars/token).
+    /// maintaining backwards compatibility for simple selection.
     pub fn select_skills<'a>(
         &self,
         available_skills: &'a [&'a SkillManifest],
         user_prompt: &str,
     ) -> Vec<&'a SkillManifest> {
-        let prompt_lower = user_prompt.to_lowercase();
-        let mut selected = Vec::new();
-        let mut token_estimate = 0;
+        let budgeted = self.budget_skills(available_skills, user_prompt, None);
+        let active_names: Vec<String> = budgeted.activated.into_iter().map(|s| s.metadata.name).collect();
 
+        available_skills
+            .iter()
+            .copied()
+            .filter(|s| active_names.contains(&s.metadata.name))
+            .collect()
+    }
+
+    /// Comprehensive dynamic skill budgeter:
+    /// - Filters for model compatibility and enabled state
+    /// - Matches triggers (keywords and regex)
+    /// - Prioritizes: Pinned + Triggered > Pinned > Triggered > Inactive
+    /// - Enforces token budget: full instructions for active skills, 1-line capability summary
+    ///   for inactive skills, gracefully omitting overflow.
+    pub fn budget_skills(
+        &self,
+        available_skills: &[&SkillManifest],
+        user_prompt: &str,
+        model_name: Option<&str>,
+    ) -> BudgetedSkills {
+        let mut activated = Vec::new();
+        let mut summarized = Vec::new();
+        let mut omitted = Vec::new();
+        let mut tokens_used = 0;
+
+        // 1. Filter enabled and model-compatible skills
+        let mut candidates = Vec::new();
         for skill in available_skills {
             if !skill.metadata.enabled {
                 continue;
             }
 
-            let triggered = if skill.metadata.triggers.is_empty() {
-                prompt_lower.contains(&skill.metadata.name.to_lowercase())
-            } else {
-                skill.metadata.triggers.iter().any(|t| {
-                    let t_trimmed = t.trim().to_lowercase();
-                    !t_trimmed.is_empty() && prompt_lower.contains(&t_trimmed)
-                })
+            if let Some(target_model) = model_name {
+                if !skill.metadata.compatible_models.is_empty() {
+                    let compatible = skill.metadata.compatible_models.iter().any(|cm| {
+                        let cm_lower = cm.to_lowercase();
+                        let target_lower = target_model.to_lowercase();
+                        target_lower.contains(&cm_lower) || cm_lower.contains(&target_lower)
+                    });
+                    if !compatible {
+                        omitted.push(format!(
+                            "{} (incompatible with model '{}')",
+                            skill.metadata.name, target_model
+                        ));
+                        continue;
+                    }
+                }
+            }
+
+            let triggered = Self::matches_triggers(skill, user_prompt);
+            let pinned = skill.metadata.pinned;
+
+            // Priority:
+            // 0: Pinned && Triggered
+            // 1: Pinned
+            // 2: Triggered
+            // 3: Inactive / Candidate for summary
+            let priority = match (pinned, triggered) {
+                (true, true) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (false, false) => 3,
             };
 
-            if triggered {
-                let estimated_tokens = ((skill.instructions.len() / 4) + 50).min(skill.metadata.max_tokens);
-                if token_estimate + estimated_tokens <= self.max_total_tokens {
-                    token_estimate += estimated_tokens;
-                    selected.push(*skill);
+            candidates.push((priority, *skill));
+        }
+
+        // Sort candidates by priority ascending (0 first, then 1, 2, 3)
+        candidates.sort_by_key(|(p, _)| *p);
+
+        // 2. Allocate tokens for full activation (priorities 0, 1, 2)
+        let mut summary_candidates = Vec::new();
+
+        for (priority, skill) in candidates {
+            if priority < 3 {
+                // Candidate for full activation
+                let est = Self::estimate_skill_tokens(skill);
+                if tokens_used + est <= self.max_total_tokens {
+                    tokens_used += est;
+                    activated.push((*skill).clone());
+                } else {
+                    // Exceeded budget for full instructions: demote to summary candidate
+                    summary_candidates.push(skill);
                 }
+            } else {
+                // Priority 3: Inactive candidate for summary
+                summary_candidates.push(skill);
             }
         }
 
-        selected
+        // 3. Allocate tokens for 1-line capability summaries
+        for skill in summary_candidates {
+            let summary = SkillSummary {
+                name: skill.metadata.name.clone(),
+                description: if skill.metadata.description.is_empty() {
+                    format!("Skill {}", skill.metadata.name)
+                } else {
+                    skill.metadata.description.clone()
+                },
+                version: skill.metadata.version.clone(),
+            };
+
+            let summary_str = format!("- {} (v{}): {}", summary.name, summary.version, summary.description);
+            let summary_tokens = (summary_str.chars().count() / 4) + 4;
+
+            if tokens_used + summary_tokens <= self.max_total_tokens {
+                tokens_used += summary_tokens;
+                summarized.push(summary);
+            } else {
+                omitted.push(format!("{} (token budget exhausted)", skill.metadata.name));
+            }
+        }
+
+        BudgetedSkills {
+            activated,
+            summarized,
+            omitted,
+            estimated_tokens: tokens_used,
+            max_budget_tokens: self.max_total_tokens,
+        }
+    }
+
+    /// Check if user prompt triggers skill via keywords or regex
+    pub fn matches_triggers(skill: &SkillManifest, user_prompt: &str) -> bool {
+        let prompt_trimmed = user_prompt.trim();
+        if prompt_trimmed.is_empty() {
+            return false;
+        }
+
+        let prompt_lower = prompt_trimmed.to_lowercase();
+
+        if skill.metadata.triggers.is_empty() {
+            return prompt_lower.contains(&skill.metadata.name.to_lowercase());
+        }
+
+        for trigger in &skill.metadata.triggers {
+            let t_trimmed = trigger.trim();
+            if t_trimmed.is_empty() {
+                continue;
+            }
+
+            // Check if trigger is surrounded by slashes: e.g. /regex/
+            let regex_pattern = if t_trimmed.starts_with('/') && t_trimmed.ends_with('/') && t_trimmed.len() > 2 {
+                Some(&t_trimmed[1..t_trimmed.len() - 1])
+            } else if t_trimmed.contains(['^', '$', '*', '+', '?', '\\', '[', ']']) {
+                Some(t_trimmed)
+            } else {
+                None
+            };
+
+            if let Some(pat) = regex_pattern {
+                if let Ok(re) = RegexBuilder::new(pat).case_insensitive(true).build() {
+                    if re.is_match(user_prompt) {
+                        return true;
+                    }
+                    continue;
+                }
+            }
+
+            // Keyword match (case-insensitive substring)
+            if prompt_lower.contains(&t_trimmed.to_lowercase()) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Estimate context tokens consumed by a skill's full instructions
+    pub fn estimate_skill_tokens(skill: &SkillManifest) -> usize {
+        let chars = skill.instructions.chars().count();
+        let token_est = (chars / 4) + 20;
+        token_est.min(skill.metadata.max_tokens).max(1)
     }
 }
 
@@ -60,31 +234,31 @@ mod tests {
     use super::*;
     use crate::manifest::{SkillManifest, SkillMetadata};
 
+    fn make_skill(name: &str, triggers: Vec<&str>, pinned: bool, tokens: usize) -> SkillManifest {
+        SkillManifest {
+            metadata: SkillMetadata {
+                name: name.into(),
+                description: format!("Description of {name}"),
+                version: "0.1.0".into(),
+                author: None,
+                triggers: triggers.into_iter().map(String::from).collect(),
+                max_tokens: tokens,
+                pinned,
+                compatible_models: vec![],
+                enabled: true,
+                tools: vec![],
+            },
+            instructions: format!("Instructions for {name} with enough words to count"),
+            source_path: None,
+            base_dir: None,
+            tools: vec![],
+        }
+    }
+
     #[test]
     fn test_budgeter_selection() {
-        let skill1 = SkillManifest {
-            metadata: SkillMetadata {
-                name: "rust".into(),
-                description: "Rust".into(),
-                triggers: vec!["cargo".into(), "rust".into()],
-                max_tokens: 500,
-                enabled: true,
-            },
-            instructions: "Rust instructions".into(),
-            source_path: None,
-        };
-
-        let skill2 = SkillManifest {
-            metadata: SkillMetadata {
-                name: "python".into(),
-                description: "Python".into(),
-                triggers: vec!["python".into()],
-                max_tokens: 500,
-                enabled: true,
-            },
-            instructions: "Python instructions".into(),
-            source_path: None,
-        };
+        let skill1 = make_skill("rust", vec!["cargo", "rust"], false, 500);
+        let skill2 = make_skill("python", vec!["python"], false, 500);
 
         let list = vec![&skill1, &skill2];
         let budgeter = SkillContextBudgeter::default();
@@ -94,17 +268,7 @@ mod tests {
         assert_eq!(matches[0].metadata.name, "rust");
 
         // Skill without triggers matches only if prompt mentions name
-        let skill_no_triggers = SkillManifest {
-            metadata: SkillMetadata {
-                name: "docker-helper".into(),
-                description: "Docker helper".into(),
-                triggers: vec![],
-                max_tokens: 500,
-                enabled: true,
-            },
-            instructions: "Docker commands".into(),
-            source_path: None,
-        };
+        let skill_no_triggers = make_skill("docker-helper", vec![], false, 500);
         let list_with_untriggered = vec![&skill1, &skill_no_triggers];
         let matches2 = budgeter.select_skills(&list_with_untriggered, "What is the capital of France?");
         assert_eq!(matches2.len(), 0);
@@ -112,5 +276,72 @@ mod tests {
         let matches3 = budgeter.select_skills(&list_with_untriggered, "Use docker-helper for this container");
         assert_eq!(matches3.len(), 1);
         assert_eq!(matches3[0].metadata.name, "docker-helper");
+    }
+
+    #[test]
+    fn test_pinned_skills_prioritized() {
+        let mut skill_pinned = make_skill("base-linter", vec!["lint"], true, 100);
+        skill_pinned.instructions = "Always follow strict linting rules".into();
+
+        let mut skill_triggered = make_skill("react-expert", vec!["react", "frontend"], false, 100);
+        skill_triggered.instructions = "React component best practices".into();
+
+        let list = vec![&skill_pinned, &skill_triggered];
+
+        // Prompt triggers react-expert, but base-linter is pinned so both should activate
+        let budgeter = SkillContextBudgeter::new(500);
+        let budgeted = budgeter.budget_skills(&list, "Build a react component", None);
+
+        assert_eq!(budgeted.activated.len(), 2);
+        // Pinned is index 0 or prioritized
+        assert!(budgeted.activated.iter().any(|s| s.metadata.name == "base-linter"));
+        assert!(budgeted.activated.iter().any(|s| s.metadata.name == "react-expert"));
+    }
+
+    #[test]
+    fn test_budget_exhaustion_summarizes_skill() {
+        let mut big_skill = make_skill("heavy-skill", vec!["heavy"], false, 1000);
+        big_skill.instructions = "A".repeat(1200); // ~300 tokens
+
+        let mut small_skill = make_skill("small-skill", vec!["small"], false, 100);
+        small_skill.instructions = "Short instruction".into();
+
+        let list = vec![&big_skill, &small_skill];
+
+        // Set budget so big_skill does not fit full instructions (e.g. 50 tokens)
+        let budgeter = SkillContextBudgeter::new(60);
+        let budgeted = budgeter.budget_skills(&list, "heavy and small", None);
+
+        // Big skill gets demoted to summary because its full instructions exceed budget
+        assert!(budgeted.summarized.iter().any(|s| s.name == "heavy-skill"));
+    }
+
+    #[test]
+    fn test_regex_trigger_matching() {
+        let skill_regex = make_skill("regex-test", vec![r"\btest(ing|ed)?\b"], false, 500);
+        let list = vec![&skill_regex];
+        let budgeter = SkillContextBudgeter::default();
+
+        let matches1 = budgeter.select_skills(&list, "We are testing this code");
+        assert_eq!(matches1.len(), 1);
+
+        let matches2 = budgeter.select_skills(&list, "No match here at all");
+        assert_eq!(matches2.len(), 0);
+    }
+
+    #[test]
+    fn test_model_compatibility_filter() {
+        let mut skill_qwen = make_skill("qwen-only", vec!["code"], false, 500);
+        skill_qwen.metadata.compatible_models = vec!["qwen2.5-coder".into()];
+
+        let list = vec![&skill_qwen];
+        let budgeter = SkillContextBudgeter::default();
+
+        let budgeted_llama = budgeter.budget_skills(&list, "write code", Some("llama-3.1-8b"));
+        assert_eq!(budgeted_llama.activated.len(), 0);
+        assert_eq!(budgeted_llama.omitted.len(), 1);
+
+        let budgeted_qwen = budgeter.budget_skills(&list, "write code", Some("qwen2.5-coder:7b"));
+        assert_eq!(budgeted_qwen.activated.len(), 1);
     }
 }

@@ -34,6 +34,7 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 sysinfo = "0.33"
+regex = "1.11"
 
 [profile.release]
 opt-level = "z"        # Optimize for size and minimal RAM footprint
