@@ -132,9 +132,24 @@ impl SystemPromptBuilder {
         if !budgeted.activated.is_empty() {
             prompt.push_str("## Active Agent Skills\n");
             for skill in &budgeted.activated {
+                let max_chars = skill.metadata.max_tokens * 4;
+                let instructions = if skill.instructions.len() > max_chars && max_chars > 0 {
+                    let char_boundary = skill
+                        .instructions
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .take_while(|&i| i <= max_chars)
+                        .last()
+                        .unwrap_or(0);
+                    let truncated = &skill.instructions[..char_boundary];
+                    format!("{}\n... [instructions truncated to max_tokens limit]", truncated)
+                } else {
+                    skill.instructions.clone()
+                };
+
                 prompt.push_str(&format!(
                     "### Skill: {} (v{})\n{}\n\n",
-                    skill.metadata.name, skill.metadata.version, skill.instructions
+                    skill.metadata.name, skill.metadata.version, instructions
                 ));
             }
         }
@@ -343,5 +358,21 @@ mod tests {
 
         let arr = res.openai_tools.as_array().unwrap();
         assert!(arr.iter().any(|t| t["function"]["name"] == "benchmark"));
+    }
+
+    #[test]
+    fn test_prompt_synthesis_truncates_oversized_skill() {
+        let mut huge_skill = make_skill("huge-skill", vec!["huge"], true);
+        huge_skill.metadata.max_tokens = 50; // Cap at 50 tokens (~200 chars)
+        huge_skill.instructions = "Z".repeat(2000); // 2000 chars
+
+        let builder = SystemPromptBuilder::new().with_budgeter(SkillContextBudgeter::new(500));
+        let res = builder.build(&[&huge_skill], "huge task", None);
+
+        assert_eq!(res.budgeted_skills.activated.len(), 1);
+        assert!(res.system_prompt.contains("truncated to max_tokens limit"));
+        // Confirm skill instructions were truncated to ~200 chars (not full 2000 Zs)
+        assert!(!res.system_prompt.contains(&"Z".repeat(300)));
+        assert!(res.system_prompt.contains(&"Z".repeat(200)));
     }
 }

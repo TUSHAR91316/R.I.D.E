@@ -145,16 +145,33 @@ impl SkillManifest {
         // Check for optional tools.json
         let tools_json = dir.join("tools.json");
         if tools_json.exists() && tools_json.is_file() {
-            if let Ok(tools_content) = std::fs::read_to_string(&tools_json) {
-                if let Ok(loaded_tools) = Self::parse_tools_json(&tools_content) {
-                    for tool in loaded_tools {
-                        if !manifest.tools.iter().any(|t| t.name == tool.name) {
-                            manifest.tools.push(tool);
+            match std::fs::read_to_string(&tools_json) {
+                Ok(tools_content) => match Self::parse_tools_json(&tools_content) {
+                    Ok(loaded_tools) => {
+                        for tool in loaded_tools {
+                            if !manifest.tools.iter().any(|t| t.name == tool.name) {
+                                manifest.tools.push(tool);
+                            }
                         }
                     }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to parse tools.json in {}: {e}",
+                            dir.display()
+                        );
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to read tools.json in {}: {e}",
+                        dir.display()
+                    );
                 }
             }
         }
+
+        // Keep metadata tools synchronized with manifest tools
+        manifest.metadata.tools = manifest.tools.clone();
 
         Ok(manifest)
     }

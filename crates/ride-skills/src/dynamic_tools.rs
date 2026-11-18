@@ -53,9 +53,17 @@ impl DynamicSkillTool {
     pub fn resolve_script_path(&self) -> Result<PathBuf> {
         let script_rel = Path::new(&self.definition.script);
 
-        // Security check: reject explicit directory traversal sequences
+        // Security check 1: reject absolute paths, root prefixes, and drive letters
+        if script_rel.is_absolute() || script_rel.has_root() {
+            return Err(RideError::Skill(format!(
+                "Absolute paths not permitted in tool script: {}",
+                self.definition.script
+            )));
+        }
+
+        // Security check 2: reject explicit directory traversal and prefix sequences
         for comp in script_rel.components() {
-            if comp == std::path::Component::ParentDir {
+            if comp == std::path::Component::ParentDir || matches!(comp, std::path::Component::Prefix(_)) {
                 return Err(RideError::Skill(format!(
                     "Path traversal detected in tool script: {}",
                     self.definition.script
@@ -127,79 +135,123 @@ impl DynamicSkillTool {
             ))
         })?;
 
-        // Write JSON string to stdin if available
+        // Write JSON string to stdin and close pipe so child does not block on stdin
         if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
             let _ = stdin.write_all(json_str.as_bytes());
+            let _ = stdin.flush();
         }
+
+        // Drain stdout and stderr in background reader threads to avoid OS pipe buffer exhaustion deadlock
+        const MAX_BYTES: usize = 512 * 1024;
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+
+        let stdout_thread = std::thread::spawn(move || {
+            let mut data = Vec::new();
+            let mut truncated = false;
+            if let Some(mut pipe) = stdout_pipe {
+                use std::io::Read;
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if data.len() < MAX_BYTES {
+                                let to_copy = n.min(MAX_BYTES - data.len());
+                                data.extend_from_slice(&chunk[..to_copy]);
+                                if to_copy < n {
+                                    truncated = true;
+                                }
+                            } else {
+                                truncated = true;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            (data, truncated)
+        });
+
+        let stderr_thread = std::thread::spawn(move || {
+            let mut data = Vec::new();
+            let mut truncated = false;
+            if let Some(mut pipe) = stderr_pipe {
+                use std::io::Read;
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if data.len() < MAX_BYTES {
+                                let to_copy = n.min(MAX_BYTES - data.len());
+                                data.extend_from_slice(&chunk[..to_copy]);
+                                if to_copy < n {
+                                    truncated = true;
+                                }
+                            } else {
+                                truncated = true;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            (data, truncated)
+        });
 
         // Wait with timeout
         let timeout = Duration::from_millis(self.definition.timeout_ms);
         let start = std::time::Instant::now();
 
-        loop {
+        let exit_code = loop {
             match child.try_wait() {
-                Ok(Some(status)) => {
-                    let mut stdout = Vec::new();
-                    let mut stderr = Vec::new();
-                    if let Some(mut out) = child.stdout.take() {
-                        use std::io::Read;
-                        let _ = out.read_to_end(&mut stdout);
-                    }
-                    if let Some(mut err) = child.stderr.take() {
-                        use std::io::Read;
-                        let _ = err.read_to_end(&mut stderr);
-                    }
-
-                    // Cap output size at 512KB to protect RAM
-                    const MAX_BYTES: usize = 512 * 1024;
-                    let stdout_truncated = if stdout.len() > MAX_BYTES {
-                        stdout.truncate(MAX_BYTES);
-                        true
-                    } else {
-                        false
-                    };
-                    let stderr_truncated = if stderr.len() > MAX_BYTES {
-                        stderr.truncate(MAX_BYTES);
-                        true
-                    } else {
-                        false
-                    };
-
-                    let mut stdout_str = String::from_utf8_lossy(&stdout).to_string();
-                    let mut stderr_str = String::from_utf8_lossy(&stderr).to_string();
-
-                    if stdout_truncated {
-                        stdout_str.push_str("\n... [stdout truncated at 512KB]");
-                    }
-                    if stderr_truncated {
-                        stderr_str.push_str("\n... [stderr truncated at 512KB]");
-                    }
-
-                    return Ok(DynamicToolOutput {
-                        exit_code: status.code().unwrap_or(-1),
-                        stdout: stdout_str,
-                        stderr: stderr_str,
-                    });
-                }
+                Ok(Some(status)) => break status.code().unwrap_or(-1),
                 Ok(None) => {
                     if start.elapsed() > timeout {
                         let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = stdout_thread.join();
+                        let _ = stderr_thread.join();
                         return Err(RideError::Skill(format!(
                             "Tool '{}' timed out after {}ms",
                             self.definition.name, self.definition.timeout_ms
                         )));
                     }
-                    std::thread::sleep(Duration::from_millis(50));
+                    std::thread::sleep(Duration::from_millis(20));
                 }
                 Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_thread.join();
+                    let _ = stderr_thread.join();
                     return Err(RideError::Skill(format!(
                         "Error waiting for tool '{}': {e}",
                         self.definition.name
                     )));
                 }
             }
+        };
+
+        let (stdout_raw, stdout_truncated) = stdout_thread.join().unwrap_or_default();
+        let (stderr_raw, stderr_truncated) = stderr_thread.join().unwrap_or_default();
+
+        let mut stdout_str = String::from_utf8_lossy(&stdout_raw).to_string();
+        let mut stderr_str = String::from_utf8_lossy(&stderr_raw).to_string();
+
+        if stdout_truncated {
+            stdout_str.push_str("\n... [stdout truncated at 512KB]");
         }
+        if stderr_truncated {
+            stderr_str.push_str("\n... [stderr truncated at 512KB]");
+        }
+
+        Ok(DynamicToolOutput {
+            exit_code,
+            stdout: stdout_str,
+            stderr: stderr_str,
+        })
     }
 
     /// Execute the tool script asynchronously
@@ -223,12 +275,23 @@ impl DynamicSkillTool {
     ) -> Result<std::process::Command> {
         let mut cmd = match ext {
             "bat" | "cmd" => {
-                let mut c = std::process::Command::new("cmd.exe");
-                c.arg("/C").arg(script_path);
-                c
+                if cfg!(target_os = "windows") {
+                    let mut c = std::process::Command::new("cmd.exe");
+                    c.arg("/C").arg(script_path);
+                    c
+                } else {
+                    let mut c = std::process::Command::new("sh");
+                    c.arg(script_path);
+                    c
+                }
             }
             "ps1" => {
-                let mut c = std::process::Command::new("powershell.exe");
+                let ps_bin = if cfg!(target_os = "windows") {
+                    "powershell.exe"
+                } else {
+                    "pwsh"
+                };
+                let mut c = std::process::Command::new(ps_bin);
                 c.args([
                     "-NoProfile",
                     "-NonInteractive",
@@ -250,7 +313,18 @@ impl DynamicSkillTool {
                 c
             }
             "sh" | "bash" => {
-                let mut c = std::process::Command::new("sh");
+                let sh_bin = if cfg!(target_os = "windows") {
+                    if Path::new(r"C:\Program Files\Git\bin\sh.exe").exists() {
+                        r"C:\Program Files\Git\bin\sh.exe"
+                    } else if Path::new(r"C:\Program Files\Git\usr\bin\sh.exe").exists() {
+                        r"C:\Program Files\Git\usr\bin\sh.exe"
+                    } else {
+                        "sh"
+                    }
+                } else {
+                    "sh"
+                };
+                let mut c = std::process::Command::new(sh_bin);
                 c.arg(script_path);
                 c
             }
@@ -298,7 +372,9 @@ impl DynamicSkillTool {
 
 fn strip_unc_prefix(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
-    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+    if let Some(stripped) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{}", stripped))
+    } else if let Some(stripped) = s.strip_prefix(r"\\?\") {
         PathBuf::from(stripped)
     } else {
         path.to_path_buf()
@@ -326,12 +402,18 @@ impl DynamicToolRegistry {
         self.tools.get(name)
     }
 
+    /// Returns list of dynamic tools deterministically sorted by tool name
     pub fn list(&self) -> Vec<&DynamicSkillTool> {
-        self.tools.values().collect()
+        let mut list: Vec<&DynamicSkillTool> = self.tools.values().collect();
+        list.sort_by(|a, b| a.definition.name.cmp(&b.definition.name));
+        list
     }
 
+    /// Returns list of tool definitions deterministically sorted by name
     pub fn definitions(&self) -> Vec<&DynamicToolDefinition> {
-        self.tools.values().map(|t| &t.definition).collect()
+        let mut list: Vec<&DynamicToolDefinition> = self.tools.values().map(|t| &t.definition).collect();
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        list
     }
 
     pub fn len(&self) -> usize {
@@ -415,6 +497,131 @@ mod tests {
         let res = tool.resolve_script_path();
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("Path traversal"));
+    }
+
+    #[test]
+    fn test_absolute_path_security_rejection() {
+        let abs_scripts = [
+            "C:\\Windows\\System32\\cmd.exe",
+            "/bin/sh",
+            "\\\\server\\share\\script.bat",
+        ];
+
+        for script in abs_scripts {
+            let def = DynamicToolDefinition {
+                name: "malicious_abs".into(),
+                description: "Try absolute path".into(),
+                parameters: serde_json::json!({}),
+                script: script.into(),
+                timeout_ms: 1000,
+            };
+
+            let tool = DynamicSkillTool::new(def, std::env::temp_dir());
+            let res = tool.resolve_script_path();
+            assert!(res.is_err(), "Expected error for absolute path: {}", script);
+            let err_msg = res.unwrap_err().to_string();
+            assert!(
+                err_msg.contains("Absolute paths not permitted") || err_msg.contains("Path traversal"),
+                "Unexpected error message: {}",
+                err_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_dynamic_tool_large_output_no_deadlock() {
+        let temp_dir = std::env::temp_dir().join("ride_test_large_output");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        if cfg!(target_os = "windows") {
+            let script_file = temp_dir.join("large_output.bat");
+            // Outputs ~20KB of data, far exceeding standard Windows 4KB pipe buffer
+            std::fs::write(
+                &script_file,
+                "@echo off\r\nfor /L %%i in (1,1,400) do echo [LINE_%%i] 1234567890123456789012345678901234567890\r\n",
+            )
+            .unwrap();
+
+            let def = DynamicToolDefinition {
+                name: "large_tool".into(),
+                description: "Produces large output".into(),
+                parameters: serde_json::json!({}),
+                script: "large_output.bat".into(),
+                timeout_ms: 10000,
+            };
+
+            let tool = DynamicSkillTool::new(def, &temp_dir);
+            let output = tool.execute_sync(&serde_json::json!({}), None).unwrap();
+
+            assert_eq!(output.exit_code, 0);
+            assert!(output.stdout.contains("[LINE_1]"));
+            assert!(output.stdout.contains("[LINE_400]"));
+            assert!(output.stdout.len() > 10_000);
+        }
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_dynamic_tool_execution_powershell() {
+        let temp_dir = std::env::temp_dir().join("ride_test_ps_tool");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        if cfg!(target_os = "windows") {
+            let script_file = temp_dir.join("test_script.ps1");
+            std::fs::write(
+                &script_file,
+                "Write-Host \"PS_OUTPUT: $env:RIDE_TOOL_PARAMS\"\n",
+            )
+            .unwrap();
+
+            let def = DynamicToolDefinition {
+                name: "ps_tool".into(),
+                description: "Test PowerShell tool".into(),
+                parameters: serde_json::json!({"type": "object", "properties": {"val": {"type": "string"}}}),
+                script: "test_script.ps1".into(),
+                timeout_ms: 8000,
+            };
+
+            let tool = DynamicSkillTool::new(def, &temp_dir);
+            let output = tool.execute_sync(&serde_json::json!({"val": "powershell_rocks"}), None).unwrap();
+
+            assert_eq!(output.exit_code, 0);
+            assert!(output.stdout.contains("PS_OUTPUT:"));
+            assert!(output.stdout.contains("powershell_rocks"));
+        }
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_dynamic_tool_execution_python() {
+        let temp_dir = std::env::temp_dir().join("ride_test_py_tool");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let script_file = temp_dir.join("test_script.py");
+        std::fs::write(
+            &script_file,
+            "import os, sys, json\nparams = os.environ.get('RIDE_TOOL_PARAMS', '{}')\ndata = json.loads(params)\nprint(f\"PY_SUCCESS:{data.get('lang', '')}\")\n",
+        )
+        .unwrap();
+
+        let def = DynamicToolDefinition {
+            name: "py_tool".into(),
+            description: "Test Python tool".into(),
+            parameters: serde_json::json!({"type": "object", "properties": {"lang": {"type": "string"}}}),
+            script: "test_script.py".into(),
+            timeout_ms: 8000,
+        };
+
+        let tool = DynamicSkillTool::new(def, &temp_dir);
+        // Only run if python command succeeds
+        if let Ok(output) = tool.execute_sync(&serde_json::json!({"lang": "python3"}), None) {
+            assert_eq!(output.exit_code, 0);
+            assert!(output.stdout.contains("PY_SUCCESS:python3"));
+        }
+
+        let _ = std::fs::remove_dir_all(temp_dir);
     }
 
     #[test]

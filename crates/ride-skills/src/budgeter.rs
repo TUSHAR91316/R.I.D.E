@@ -120,8 +120,11 @@ impl SkillContextBudgeter {
             candidates.push((priority, *skill));
         }
 
-        // Sort candidates by priority ascending (0 first, then 1, 2, 3)
-        candidates.sort_by_key(|(p, _)| *p);
+        // Sort candidates deterministically:
+        // Priority ascending (0 first, then 1, 2, 3), then skill name alphabetically
+        candidates.sort_by(|(p_a, a), (p_b, b)| {
+            p_a.cmp(p_b).then_with(|| a.metadata.name.cmp(&b.metadata.name))
+        });
 
         // 2. Allocate tokens for full activation (priorities 0, 1, 2)
         let mut summary_candidates = Vec::new();
@@ -185,7 +188,10 @@ impl SkillContextBudgeter {
         let prompt_lower = prompt_trimmed.to_lowercase();
 
         if skill.metadata.triggers.is_empty() {
-            return prompt_lower.contains(&skill.metadata.name.to_lowercase());
+            let name_clean = skill.metadata.name.to_lowercase();
+            let name_spaced = name_clean.replace('-', " ");
+            return contains_keyword(&prompt_lower, &name_clean)
+                || contains_keyword(&prompt_lower, &name_spaced);
         }
 
         for trigger in &skill.metadata.triggers {
@@ -195,16 +201,25 @@ impl SkillContextBudgeter {
             }
 
             // Check if trigger is surrounded by slashes: e.g. /regex/
-            let regex_pattern = if t_trimmed.starts_with('/') && t_trimmed.ends_with('/') && t_trimmed.len() > 2 {
-                Some(&t_trimmed[1..t_trimmed.len() - 1])
-            } else if t_trimmed.contains(['^', '$', '*', '+', '?', '\\', '[', ']']) {
-                Some(t_trimmed)
-            } else {
-                None
-            };
+            // or contains explicit regex anchors like \b, ^, $
+            let is_slash_regex = t_trimmed.starts_with('/') && t_trimmed.ends_with('/') && t_trimmed.len() > 2;
+            let is_explicit_regex = is_slash_regex
+                || t_trimmed.contains(r"\b")
+                || t_trimmed.starts_with('^')
+                || t_trimmed.ends_with('$');
 
-            if let Some(pat) = regex_pattern {
-                if let Ok(re) = RegexBuilder::new(pat).case_insensitive(true).build() {
+            if is_explicit_regex {
+                let pat = if is_slash_regex {
+                    &t_trimmed[1..t_trimmed.len() - 1]
+                } else {
+                    t_trimmed
+                };
+
+                if let Ok(re) = RegexBuilder::new(pat)
+                    .case_insensitive(true)
+                    .size_limit(100_000)
+                    .build()
+                {
                     if re.is_match(user_prompt) {
                         return true;
                     }
@@ -212,8 +227,8 @@ impl SkillContextBudgeter {
                 }
             }
 
-            // Keyword match (case-insensitive substring)
-            if prompt_lower.contains(&t_trimmed.to_lowercase()) {
+            // Keyword match with word boundary check
+            if contains_keyword(&prompt_lower, t_trimmed) {
                 return true;
             }
         }
@@ -227,6 +242,55 @@ impl SkillContextBudgeter {
         let token_est = (chars / 4) + 20;
         token_est.min(skill.metadata.max_tokens).max(1)
     }
+}
+
+/// Case-insensitive keyword matching respecting word boundaries.
+/// Ensures keyword triggers like "git" do not spuriously match inside "digital",
+/// while matching standalone occurrences like "git", "git status", "(git)", etc.
+pub fn contains_keyword(text: &str, keyword: &str) -> bool {
+    let kw = keyword.trim();
+    if kw.is_empty() {
+        return false;
+    }
+
+    let kw_lower = kw.to_lowercase();
+    let text_lower = text.to_lowercase();
+
+    let first_char = kw_lower.chars().next().unwrap();
+    let last_char = kw_lower.chars().next_back().unwrap();
+    let kw_starts_word = first_char.is_alphanumeric() || first_char == '_';
+    let kw_ends_word = last_char.is_alphanumeric() || last_char == '_';
+
+    let mut start_idx = 0;
+    while let Some(idx) = text_lower[start_idx..].find(&kw_lower) {
+        let abs_idx = start_idx + idx;
+        let end_idx = abs_idx + kw_lower.len();
+
+        let left_ok = if kw_starts_word && abs_idx > 0 {
+            let prev_char = text_lower[..abs_idx].chars().next_back().unwrap();
+            !prev_char.is_alphanumeric() && prev_char != '_'
+        } else {
+            true
+        };
+
+        let right_ok = if kw_ends_word && end_idx < text_lower.len() {
+            let next_char = text_lower[end_idx..].chars().next().unwrap();
+            !next_char.is_alphanumeric() && next_char != '_'
+        } else {
+            true
+        };
+
+        if left_ok && right_ok {
+            return true;
+        }
+
+        start_idx = abs_idx + 1;
+        if start_idx >= text_lower.len() {
+            break;
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -343,5 +407,50 @@ mod tests {
 
         let budgeted_qwen = budgeter.budget_skills(&list, "write code", Some("qwen2.5-coder:7b"));
         assert_eq!(budgeted_qwen.activated.len(), 1);
+    }
+
+    #[test]
+    fn test_word_boundary_matching_prevents_false_positives() {
+        let skill_git = make_skill("git-assistant", vec!["git"], false, 500);
+        let skill_go = make_skill("go-expert", vec!["go"], false, 500);
+        let skill_cpp = make_skill("cpp-dev", vec!["c++"], false, 500);
+
+        // "digital" contains "git" as substring, but word boundary matching must reject it
+        assert!(!SkillContextBudgeter::matches_triggers(&skill_git, "This is a digital signal processing task."));
+
+        // "cargo" contains "go" as substring, but word boundary matching must reject it
+        assert!(!SkillContextBudgeter::matches_triggers(&skill_go, "Run cargo check please."));
+
+        // Valid standalone occurrences must match
+        assert!(SkillContextBudgeter::matches_triggers(&skill_git, "How do I use git commit?"));
+        assert!(SkillContextBudgeter::matches_triggers(&skill_git, "Run (git) here."));
+        assert!(SkillContextBudgeter::matches_triggers(&skill_go, "Write idiomatic go code."));
+        assert!(SkillContextBudgeter::matches_triggers(&skill_cpp, "Compile with c++20 please."));
+    }
+
+    #[test]
+    fn test_name_with_hyphen_matching() {
+        let skill_code_review = make_skill("code-review", vec![], false, 500);
+        // Prompt says "code review" with space instead of hyphen
+        assert!(SkillContextBudgeter::matches_triggers(&skill_code_review, "Can you do a code review on this file?"));
+        assert!(SkillContextBudgeter::matches_triggers(&skill_code_review, "Run code-review"));
+    }
+
+    #[test]
+    fn test_deterministic_budget_ordering() {
+        let s_c = make_skill("charlie", vec!["common"], true, 100);
+        let s_a = make_skill("alpha", vec!["common"], true, 100);
+        let s_b = make_skill("bravo", vec!["common"], true, 100);
+
+        // Put in reverse alphabetical order
+        let list = vec![&s_c, &s_a, &s_b];
+        let budgeter = SkillContextBudgeter::new(1000);
+        let res = budgeter.budget_skills(&list, "common task", None);
+
+        // Must be sorted alpha, bravo, charlie
+        assert_eq!(res.activated.len(), 3);
+        assert_eq!(res.activated[0].metadata.name, "alpha");
+        assert_eq!(res.activated[1].metadata.name, "bravo");
+        assert_eq!(res.activated[2].metadata.name, "charlie");
     }
 }

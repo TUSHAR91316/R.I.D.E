@@ -8,12 +8,18 @@ pub struct AgentExecutor;
 impl AgentExecutor {
     /// Formats active skill instructions into a system prompt segment for local LLMs
     pub fn build_skills_prompt(skills: &[&SkillManifest]) -> String {
-        if skills.is_empty() {
+        let active_skills: Vec<&SkillManifest> = skills
+            .iter()
+            .copied()
+            .filter(|s| s.metadata.enabled)
+            .collect();
+
+        if active_skills.is_empty() {
             return String::new();
         }
 
         let mut out = String::from("\n## Active Agent Skills\n");
-        for skill in skills {
+        for skill in active_skills {
             out.push_str(&format!(
                 "### Skill: {}\n{}\n\n",
                 skill.metadata.name, skill.instructions
@@ -33,6 +39,30 @@ impl AgentExecutor {
         let mut builder = SystemPromptBuilder::new();
         if let Some(dyn_tools) = dynamic_tools {
             builder = builder.with_dynamic_tools(dyn_tools.clone());
+        } else {
+            // Auto-populate tools from active skills when no registry is passed
+            let mut auto_tools = DynamicToolRegistry::new();
+            for skill in skills {
+                if !skill.metadata.enabled {
+                    continue;
+                }
+                let base_dir = skill
+                    .base_dir
+                    .clone()
+                    .or_else(|| {
+                        skill
+                            .source_path
+                            .as_ref()
+                            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                    })
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                for tool_def in &skill.tools {
+                    auto_tools.register(ride_skills::DynamicSkillTool::new(tool_def.clone(), &base_dir));
+                }
+            }
+            if !auto_tools.is_empty() {
+                builder = builder.with_dynamic_tools(auto_tools);
+            }
         }
         builder.build(skills, user_prompt, model_name)
     }
@@ -247,5 +277,72 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_build_system_prompt_auto_populates_dynamic_tools() {
+        let manifest = SkillManifest {
+            metadata: ride_skills::SkillMetadata {
+                name: "auto-tool-skill".into(),
+                description: "Skill with embedded tool".into(),
+                version: "1.0.0".into(),
+                author: None,
+                triggers: vec!["auto".into()],
+                max_tokens: 500,
+                pinned: true,
+                compatible_models: vec![],
+                enabled: true,
+                tools: vec![],
+            },
+            instructions: "Auto tool instructions".into(),
+            source_path: None,
+            base_dir: Some(std::path::PathBuf::from(".")),
+            tools: vec![DynamicToolDefinition {
+                name: "auto_action".into(),
+                description: "Action from skill".into(),
+                parameters: json!({"type": "object"}),
+                script: "action.bat".into(),
+                timeout_ms: 5000,
+            }],
+        };
+
+        // Pass dynamic_tools: None
+        let res = AgentExecutor::build_system_prompt(&[&manifest], None, "auto prompt", None);
+
+        // Tool should be auto-extracted and present in prompt and openai_tools
+        assert!(res.system_prompt.contains("auto_action"));
+        let tools_arr = res.openai_tools.as_array().unwrap();
+        assert!(tools_arr.iter().any(|t| t["function"]["name"] == "auto_action"));
+    }
+
+    #[test]
+    fn test_build_skills_prompt_ignores_disabled() {
+        let enabled_skill = SkillManifest {
+            metadata: ride_skills::SkillMetadata {
+                name: "enabled-skill".into(),
+                description: "Enabled".into(),
+                version: "1.0.0".into(),
+                author: None,
+                triggers: vec![],
+                max_tokens: 500,
+                pinned: true,
+                compatible_models: vec![],
+                enabled: true,
+                tools: vec![],
+            },
+            instructions: "Enabled instructions".into(),
+            source_path: None,
+            base_dir: None,
+            tools: vec![],
+        };
+
+        let mut disabled_skill = enabled_skill.clone();
+        disabled_skill.metadata.name = "disabled-skill".into();
+        disabled_skill.metadata.enabled = false;
+        disabled_skill.instructions = "Disabled instructions".into();
+
+        let prompt = AgentExecutor::build_skills_prompt(&[&enabled_skill, &disabled_skill]);
+        assert!(prompt.contains("enabled-skill"));
+        assert!(!prompt.contains("disabled-skill"));
     }
 }

@@ -284,3 +284,76 @@ fn test_prompt_synthesis_and_openai_schema_integration() {
     assert!(names.contains(&"run_command"));
     assert!(names.contains(&"run_test_suite"));
 }
+
+#[test]
+fn test_dual_scope_with_tools_json_and_script_execution() {
+    let tmp = std::env::temp_dir().join("ride_dual_scope_tools_test");
+    let global_dir = tmp.join("global");
+    let ws_root = tmp.join("workspace");
+    let ws_skills = ws_root.join(".ride").join("skills");
+
+    let global_skill_dir = global_dir.join("builder");
+    let ws_skill_dir = ws_skills.join("builder");
+
+    let _ = std::fs::create_dir_all(&global_skill_dir);
+    let _ = std::fs::create_dir_all(&ws_skill_dir);
+
+    // Global version of builder
+    std::fs::write(
+        global_skill_dir.join("SKILL.md"),
+        "---\nname: builder\ndescription: Global Builder\nversion: 1.0.0\n---\nGlobal instructions",
+    ).unwrap();
+
+    std::fs::write(
+        global_skill_dir.join("tools.json"),
+        r#"[{"name": "build_cmd", "description": "Global build", "script": "build.bat"}]"#,
+    ).unwrap();
+
+    std::fs::write(
+        global_skill_dir.join("build.bat"),
+        "@echo off\r\necho GLOBAL_BUILD\r\n",
+    ).unwrap();
+
+    // Workspace version of builder (overrides global)
+    std::fs::write(
+        ws_skill_dir.join("SKILL.md"),
+        "---\nname: builder\ndescription: Workspace Custom Builder\nversion: 2.0.0\n---\nWorkspace custom instructions",
+    ).unwrap();
+
+    std::fs::write(
+        ws_skill_dir.join("tools.json"),
+        r#"[{"name": "build_cmd", "description": "Workspace build", "script": "build.bat"}]"#,
+    ).unwrap();
+
+    std::fs::write(
+        ws_skill_dir.join("build.bat"),
+        "@echo off\r\necho WORKSPACE_CUSTOM_BUILD\r\n",
+    ).unwrap();
+
+    let mut registry = SkillRegistry::new();
+    let summary = registry.scan_dual(&global_dir, Some(&ws_root)).unwrap();
+
+    assert_eq!(summary.global_count, 1);
+    assert_eq!(summary.workspace_count, 1);
+    assert_eq!(summary.collisions.len(), 1);
+
+    let active_skill = registry.get("builder").unwrap();
+    assert_eq!(active_skill.metadata.version, "2.0.0");
+    assert_eq!(active_skill.metadata.description, "Workspace Custom Builder");
+    assert_eq!(active_skill.tools.len(), 1);
+    assert_eq!(active_skill.metadata.tools.len(), 1);
+
+    // Dynamic tool must execute workspace version, not global version
+    let dyn_tools = registry.build_dynamic_tools();
+    assert_eq!(dyn_tools.len(), 1);
+    let tool = dyn_tools.get("build_cmd").unwrap();
+
+    if cfg!(target_os = "windows") {
+        let output = tool.execute_sync(&serde_json::json!({}), None).unwrap();
+        assert_eq!(output.exit_code, 0);
+        assert!(output.stdout.contains("WORKSPACE_CUSTOM_BUILD"));
+        assert!(!output.stdout.contains("GLOBAL_BUILD"));
+    }
+
+    let _ = std::fs::remove_dir_all(tmp);
+}

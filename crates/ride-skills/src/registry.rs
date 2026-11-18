@@ -171,12 +171,14 @@ impl SkillRegistry {
         changed
     }
 
-    /// List all active effective skills
+    /// List all active effective skills (deterministically sorted by name)
     pub fn list(&self) -> Vec<&SkillManifest> {
-        self.effective_skills.values().collect()
+        let mut list: Vec<&SkillManifest> = self.effective_skills.values().collect();
+        list.sort_by(|a, b| a.metadata.name.cmp(&b.metadata.name));
+        list
     }
 
-    /// List registered skills with metadata on scope and collision
+    /// List registered skills with metadata on scope and collision (sorted by name)
     pub fn list_registered(&self) -> Vec<RegisteredSkill> {
         let mut out = Vec::new();
         for (_name, skill) in &self.workspace_skills {
@@ -194,6 +196,7 @@ impl SkillRegistry {
                 overridden,
             });
         }
+        out.sort_by(|a, b| a.manifest.metadata.name.cmp(&b.manifest.metadata.name));
         out
     }
 
@@ -239,6 +242,22 @@ impl SkillRegistry {
             return Ok(0);
         }
 
+        // If dir itself is a skill directory (contains SKILL.md or skill.md)
+        let skill_md = dir.join("SKILL.md");
+        let alt_skill_md = dir.join("skill.md");
+        if skill_md.is_file() || alt_skill_md.is_file() {
+            return match SkillManifest::load_from_directory(dir) {
+                Ok(manifest) => {
+                    self.register(manifest, scope);
+                    Ok(1)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load skill from {}: {e}", dir.display());
+                    Ok(0)
+                }
+            };
+        }
+
         let mut loaded = 0;
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
@@ -257,18 +276,6 @@ impl SkillRegistry {
                 if let Ok(manifest) = SkillManifest::load_from_directory(&path) {
                     self.register(manifest, scope);
                     loaded += 1;
-                }
-            } else if path.file_name().map_or(false, |n| {
-                n.to_string_lossy().eq_ignore_ascii_case("skill.md")
-            }) {
-                // If a SKILL.md is directly in dir
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(mut manifest) = SkillManifest::parse_skill_markdown(&content) {
-                        manifest.source_path = Some(path.clone());
-                        manifest.base_dir = path.parent().map(|p| p.to_path_buf());
-                        self.register(manifest, scope);
-                        loaded += 1;
-                    }
                 }
             }
         }
@@ -300,11 +307,13 @@ impl SkillRegistry {
     /// Scan workspace skills directory (<workspace_root>/.ride/skills)
     pub fn scan_workspace(&mut self, workspace_root: &Path) -> Result<usize> {
         let ws_skills = Self::workspace_skills_dir(workspace_root);
-        if ws_skills.exists() {
+        if ws_skills.exists() && ws_skills.is_dir() {
             self.scan_dir(&ws_skills, SkillScope::Workspace)
-        } else {
-            // Also check if workspace_root itself has skills
+        } else if workspace_root.join("SKILL.md").is_file() || workspace_root.join("skill.md").is_file() {
+            // Workspace root itself has a SKILL.md
             self.scan_dir(workspace_root, SkillScope::Workspace)
+        } else {
+            Ok(0)
         }
     }
 
@@ -466,5 +475,66 @@ mod tests {
         assert_eq!(registry.get("skill-a").unwrap().instructions, "Body A");
 
         let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn test_scan_single_skill_dir_with_tools_json() {
+        let tmp = std::env::temp_dir().join("ride_test_single_skill_dir");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        std::fs::write(
+            tmp.join("SKILL.md"),
+            "---\nname: standalone-skill\ndescription: Single directory skill\n---\nStandalone body",
+        )
+        .unwrap();
+
+        std::fs::write(
+            tmp.join("tools.json"),
+            r#"[
+                {
+                    "name": "standalone_tool",
+                    "description": "Custom standalone tool",
+                    "parameters": {"type": "object"},
+                    "script": "tool.bat"
+                }
+            ]"#,
+        )
+        .unwrap();
+
+        let mut registry = SkillRegistry::new();
+        let loaded = registry.scan_dir(&tmp, SkillScope::Global).unwrap();
+        assert_eq!(loaded, 1);
+
+        let skill = registry.get("standalone-skill").unwrap();
+        assert_eq!(skill.instructions, "Standalone body");
+        assert_eq!(skill.tools.len(), 1);
+        assert_eq!(skill.tools[0].name, "standalone_tool");
+        // Ensure metadata.tools is synced
+        assert_eq!(skill.metadata.tools.len(), 1);
+        assert_eq!(skill.metadata.tools[0].name, "standalone_tool");
+
+        let dyn_tools = registry.build_dynamic_tools();
+        assert_eq!(dyn_tools.len(), 1);
+        assert!(dyn_tools.get("standalone_tool").is_some());
+
+        let _ = std::fs::remove_dir_all(tmp);
+    }
+
+    #[test]
+    fn test_deterministic_list_ordering() {
+        let mut registry = SkillRegistry::new();
+        let s_z = make_test_manifest("zeta", "Z");
+        let s_a = make_test_manifest("alpha", "A");
+        let s_m = make_test_manifest("mike", "M");
+
+        registry.register(s_z, SkillScope::Global);
+        registry.register(s_a, SkillScope::Global);
+        registry.register(s_m, SkillScope::Global);
+
+        let list = registry.list();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].metadata.name, "alpha");
+        assert_eq!(list[1].metadata.name, "mike");
+        assert_eq!(list[2].metadata.name, "zeta");
     }
 }
