@@ -129,3 +129,6 @@ When you ask a question containing any of the trigger words, the editor automati
 ## License
 
 This project is licensed under the MIT License.
+## Still in testing phase
+
+ui is not good need to switch to better ui
