@@ -2942,7 +2942,7 @@ dependencies = [
 
 [[package]]
 name = "ride-agent"
-version = "1.0.1"
+version = "2.0.0"
 dependencies = [
  "bytes",
  "futures-util",
@@ -2960,7 +2960,7 @@ dependencies = [
 
 [[package]]
 name = "ride-core"
-version = "1.0.1"
+version = "2.0.0"
 dependencies = [
  "bytes",
  "serde",
@@ -2972,7 +2972,7 @@ dependencies = [
 
 [[package]]
 name = "ride-desktop"
-version = "1.0.1"
+version = "2.0.0"
 dependencies = [
  "ride-agent",
  "ride-core",
@@ -2992,7 +2992,7 @@ dependencies = [
 
 [[package]]
 name = "ride-discovery"
-version = "1.0.1"
+version = "2.0.0"
 dependencies = [
  "axum",
  "bytes",
@@ -3009,7 +3009,7 @@ dependencies = [
 
 [[package]]
 name = "ride-moe"
-version = "1.0.1"
+version = "2.0.0"
 dependencies = [
  "reqwest 0.12.28",
  "ride-core",
@@ -3024,7 +3024,7 @@ dependencies = [
 
 [[package]]
 name = "ride-skills"
-version = "1.0.1"
+version = "2.0.0"
 dependencies = [
  "regex",
  "ride-core",

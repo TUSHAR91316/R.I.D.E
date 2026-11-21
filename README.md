@@ -51,13 +51,29 @@ The editor provides a built-in tool runtime designed to work with local 7B to 14
 - **Resilient format parser**: Smaller local models sometimes produce malformed JSON when calling tools. R.I.D.E accepts standard OpenAI function calls, Markdown JSON blocks, and XML tags (`<tool_call name=... >`).
 - **File operations**: Includes `read_file` with bounded line ranges, atomic `write_file`, and whitespace-tolerant `edit_file` replacements.
 - **Code search**: Fast code search powered by the same grep engine used in ripgrep.
-- **Safe terminal execution**: Runs shell commands with a user confirmation step to prevent unintended system modifications.
+- **Safe terminal execution**: Read-only and whitelisted commands (`git status`, `cargo check`, `cargo test`, …) run directly. Any other command, including anything destructive, pauses the agent and shows a **Run shell command?** card with **Allow once** and **Deny**.
+- **Reversible edits**: The agent writes files with a backup snapshot. Each edit appears under **Changes** marked "Applied by the agent", where **Revert** restores the file and **Keep** removes it from the list.
+- **Stop anytime**: While a turn runs, the send button becomes a stop button (or press `Esc` in the prompt). Stopping cancels model inference and denies any pending approval.
 
 ### Switchable Interface Layouts
 Three interface layouts are available to match how you work:
-1. **VS Code mode**: A standard three-pane layout with a file explorer, multi-tab code editor, and a collapsible agent panel.
-2. **Claude Code mode**: A terminal-first layout centered around the model's reasoning stream, tool execution log, and file diff previews.
-3. **Codex mode**: A minimal, distraction-free editing canvas with an inline prompt bar (`Ctrl+K`) for rapid edits.
+1. **Editor** (`Ctrl+1`): A three-pane layout with a file explorer, workspace search, multi-tab code editor, and a resizable agent panel with chat and change review.
+2. **Agent** (`Ctrl+2`): A terminal-first layout centered on the model's reasoning stream and tool log, with slash commands (`/clear`, `/diff`, `/editor`, `/help`) and a session and changes side panel.
+3. **Zen** (`Ctrl+3`): A minimal, distraction-free editing canvas. `Ctrl+K` opens an inline edit bar on the selection, and `Ctrl+Enter` accepts the suggestion as an undoable change.
+
+### Keyboard Shortcuts
+
+| Keys | Action |
+|---|---|
+| `Ctrl+K` | Command palette (inline edit in Zen) |
+| `Ctrl+P` | Command palette |
+| `Ctrl+S` / `Ctrl+O` / `Ctrl+N` / `Ctrl+W` | Save / open by path / new file / close tab |
+| `Ctrl+B` / `Ctrl+J` / `Ctrl+L` | Toggle side bar / toggle agent panel / focus chat |
+| `Ctrl+Shift+E` / `Ctrl+Shift+F` | Explorer / workspace search |
+| `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | Editor / Agent / Zen layout |
+| `Esc` (in the prompt, while the agent works) | Stop the agent turn |
+
+The theme (dark or light) can be switched from the command palette.
 
 ---
 
@@ -129,6 +145,3 @@ When you ask a question containing any of the trigger words, the editor automati
 ## License
 
 This project is licensed under the MIT License.
-## Still in testing phase
-
-ui is not good need to switch to better ui

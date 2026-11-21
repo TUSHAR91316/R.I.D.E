@@ -1,4 +1,13 @@
-import type { DiffPayload, MoeEngineStatus, ProviderStatus, SkillInfo, UiLayout } from './types';
+import type {
+  DiffPayload,
+  DirEntryInfo,
+  MoeEngineStatus,
+  ProviderStatus,
+  SearchHit,
+  SkillInfo,
+  UiLayout,
+  WorkspaceInfo,
+} from './types';
 
 // Check if running inside Tauri WebView
 function isTauri(): boolean {
@@ -27,6 +36,16 @@ export async function getModelStatus(): Promise<ProviderStatus[]> {
 
 export async function sendAgentMessage(message: string, modelName?: string): Promise<string> {
   return callInvoke<string>('send_agent_message', { message, modelName });
+}
+
+/** Stop the agent turn in flight. Resolves to false if no turn was running. */
+export async function cancelAgentTurn(): Promise<boolean> {
+  return callInvoke<boolean>('cancel_agent_turn');
+}
+
+/** Allow or deny a shell command the agent is waiting on. */
+export async function respondApproval(requestId: string, approved: boolean): Promise<void> {
+  return callInvoke<void>('respond_approval', { requestId, approved });
 }
 
 export async function getActiveSkills(): Promise<SkillInfo[]> {
@@ -77,6 +96,26 @@ export async function readFile(path: string): Promise<string> {
   return callInvoke<string>('read_file', { path });
 }
 
+export async function getWorkspaceInfo(): Promise<WorkspaceInfo> {
+  return callInvoke<WorkspaceInfo>('get_workspace_info');
+}
+
+export async function openWorkspace(path: string): Promise<WorkspaceInfo> {
+  return callInvoke<WorkspaceInfo>('open_workspace', { path });
+}
+
+export async function listDir(path?: string): Promise<DirEntryInfo[]> {
+  return callInvoke<DirEntryInfo[]>('list_dir', { path: path ?? null });
+}
+
+export async function searchWorkspace(
+  query: string,
+  caseSensitive = false,
+  isRegex = false
+): Promise<SearchHit[]> {
+  return callInvoke<SearchHit[]>('search_workspace', { query, caseSensitive, isRegex });
+}
+
 export async function onModelEvent(callback: (event: any) => void): Promise<() => void> {
   if (isTauri()) {
     try {
@@ -99,11 +138,95 @@ export async function onAgentEvent(callback: (event: any) => void): Promise<() =
     } catch (err) {
       console.warn('[Tauri Event Listener Error]:', err);
     }
+    return () => {};
   }
-  return () => {};
+  mockAgentListeners.add(callback);
+  return () => mockAgentListeners.delete(callback);
 }
 
 // ─── Browser Fallback Mocks ───────────────────────────────────────────────────
+
+const mockAgentListeners = new Set<(event: any) => void>();
+const mockApprovalWaiters = new Map<string, (approved: boolean) => void>();
+let mockTurn: { finish: (text: string, cancelled?: boolean) => void } | null = null;
+let mockApprovalSeq = 1;
+
+function emitMock(event: unknown): void {
+  mockAgentListeners.forEach((cb) => cb(event));
+}
+
+/**
+ * Browser-preview stand-in for an agent turn. It emits the same events the
+ * backend does, so approvals, stop and agent-applied diffs can be exercised
+ * without Tauri: mention "test"/"run"/"cargo" to trigger a shell-command
+ * approval, and "edit"/"fix" to get an applied diff.
+ */
+function mockAgentTurn(text: string): Promise<string> {
+  return new Promise<string>((resolve) => {
+    let done = false;
+    const timers: number[] = [];
+    const later = (ms: number, fn: () => void) => timers.push(window.setTimeout(() => !done && fn(), ms));
+    const finish = (reply: string, cancelled = false) => {
+      if (done) return;
+      done = true;
+      timers.forEach(clearTimeout);
+      mockApprovalWaiters.clear();
+      mockTurn = null;
+      if (cancelled) emitMock('TurnCancelled'); // serde serialises unit variants as bare strings
+      resolve(reply);
+    };
+    mockTurn = { finish };
+
+    const lower = text.toLowerCase();
+    const wantsShell = /\b(test|run|cargo)\b/.test(lower);
+    const wantsEdit = /\b(edit|fix|change)\b/.test(lower);
+
+    const afterShell = () => {
+      if (wantsEdit) {
+        const path = 'crates/ride-desktop/src/main.rs';
+        emitMock({ ToolCallRequested: { tool_name: 'edit_file', arguments: { path } } });
+        later(500, () => {
+          emitMock({
+            DiffGenerated: {
+              path,
+              diff: `--- a/${path}\n+++ b/${path}\n@@ -1,3 +1,3 @@\n-// Browser preview: start the Tauri app to edit real files.\n+// Browser preview (edited by the mock agent).\n mod commands;\n `,
+            },
+          });
+          emitMock({ ToolExecuted: { tool_name: 'edit_file', success: true, output_preview: `Successfully edited ${path} (1 additions, 1 deletions)` } });
+          later(400, () => finish(`Done. I edited \`${path}\`; review it under **Changes** and revert it if you don't want it.`));
+        });
+      } else {
+        later(500, () => finish(`(Browser preview) Mock reply to: "${text}". Start the desktop app to talk to a local model.`));
+      }
+    };
+
+    emitMock({ ThinkingDelta: { delta: 'Looking at the request… ' } });
+    if (!wantsShell) {
+      later(600, afterShell);
+      return;
+    }
+
+    const command = 'cargo test -p ride-desktop';
+    const id = `req_${mockApprovalSeq++}`;
+    later(500, () => {
+      emitMock({ ToolCallRequested: { tool_name: 'run_command', arguments: { command } } });
+      emitMock({ ApprovalRequired: { request_id: id, command, safety_level: 'SafeExecution' } });
+      mockApprovalWaiters.set(id, (approved) => {
+        emitMock({ ApprovalResponded: { request_id: id, approved } });
+        later(700, () => {
+          emitMock({
+            ToolExecuted: {
+              tool_name: 'run_command',
+              success: approved,
+              output_preview: approved ? 'test result: ok. 29 passed; 0 failed' : `Command '${command}' denied by user`,
+            },
+          });
+          afterShell();
+        });
+      });
+    });
+  });
+}
 
 let mockSkills: SkillInfo[] = [
   { name: 'rust-expert', description: 'Deep idiomatic Rust engineering, borrow checker mastery, zero-copy architecture', triggers: ['rust', 'cargo', 'tokio', 'unsafe'], enabled: true },
@@ -129,6 +252,32 @@ let mockDiffs: DiffPayload[] = [
 ];
 
 let mockLayout: UiLayout = 'vs_code';
+
+const dir = (path: string): DirEntryInfo => ({ name: path.split('/').pop()!, path, is_dir: true });
+const file = (path: string): DirEntryInfo => ({ name: path.split('/').pop()!, path, is_dir: false });
+
+const mockTree: Record<string, DirEntryInfo[]> = {
+  '': [dir('crates'), file('Cargo.lock'), file('Cargo.toml'), file('README.md')],
+  crates: ['ride-agent', 'ride-core', 'ride-desktop', 'ride-discovery', 'ride-moe', 'ride-skills'].map((n) =>
+    dir(`crates/${n}`)
+  ),
+  'crates/ride-desktop': [
+    dir('crates/ride-desktop/src'),
+    dir('crates/ride-desktop/ui'),
+    file('crates/ride-desktop/Cargo.toml'),
+    file('crates/ride-desktop/tauri.conf.json'),
+  ],
+  'crates/ride-desktop/src': [file('crates/ride-desktop/src/commands.rs'), file('crates/ride-desktop/src/main.rs')],
+};
+
+const mockFiles: Record<string, string> = {
+  'README.md': '# R.I.D.E\n\n**R.I.D.E** (Rust Intelligent Development Environment) is a lightweight, local-first code editor.\n',
+  'Cargo.toml': '[workspace]\nresolver = "2"\nmembers = ["crates/*"]\n',
+  'crates/ride-desktop/src/main.rs':
+    '// Browser preview: start the Tauri app to edit real files.\nmod commands;\n\nfn main() {\n    tauri::Builder::default()\n        .run(tauri::generate_context!())\n        .expect("error while running R.I.D.E");\n}\n',
+  'crates/ride-desktop/src/commands.rs':
+    '/// Tauri IPC commands for the R.I.D.E desktop application.\n#[tauri::command]\npub async fn read_file(path: String) -> Result<String, String> {\n    todo!()\n}\n',
+};
 
 async function mockInvoke<T>(cmd: string, args?: Record<string, any>): Promise<T> {
   switch (cmd) {
@@ -221,12 +370,55 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, any>): Promise<T
     }
 
     case 'read_file': {
-      return `// Mock file content for ${args?.path}\n` as unknown as T;
+      const p = String(args?.path ?? '');
+      if (mockFiles[p] !== undefined) return mockFiles[p] as unknown as T;
+      throw new Error(`Failed to read '${p}': not found (browser preview)`);
+    }
+
+    case 'get_workspace_info':
+      return { root: 'G:/Projects/R.I.D.E', name: 'R.I.D.E' } as unknown as T;
+
+    case 'open_workspace': {
+      const p = String(args?.path ?? '');
+      return { root: p, name: p.split(/[\\/]/).filter(Boolean).pop() || p } as unknown as T;
+    }
+
+    case 'list_dir': {
+      const p = String(args?.path ?? '');
+      return (mockTree[p] ?? []) as unknown as T;
+    }
+
+    case 'search_workspace': {
+      const q = String(args?.query ?? '').toLowerCase();
+      if (!q) return [] as unknown as T;
+      const hits: SearchHit[] = [];
+      for (const [path, text] of Object.entries(mockFiles)) {
+        text.split('\n').forEach((line, i) => {
+          if (line.toLowerCase().includes(q)) hits.push({ path, line: i + 1, text: line });
+        });
+      }
+      return hits as unknown as T;
     }
 
     case 'send_agent_message': {
-      const text = args?.message || '';
-      return `R.I.D.E Local Agent processed request: "${text}". Checked workspace files and AST structures.` as unknown as T;
+      if (mockTurn) throw new Error('The agent is already working on a turn.');
+      const text = String(args?.message || '');
+      return (await mockAgentTurn(text)) as unknown as T;
+    }
+
+    case 'cancel_agent_turn': {
+      const running = mockTurn !== null;
+      mockTurn?.finish('Execution cancelled by user.', true);
+      return running as unknown as T;
+    }
+
+    case 'respond_approval': {
+      const id = String(args?.requestId ?? '');
+      const waiter = mockApprovalWaiters.get(id);
+      if (!waiter) throw new Error(`No pending approval with id '${id}' (the turn may have ended)`);
+      mockApprovalWaiters.delete(id);
+      waiter(Boolean(args?.approved));
+      return undefined as unknown as T;
     }
 
     default:

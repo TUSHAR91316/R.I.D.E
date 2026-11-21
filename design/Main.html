@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>R.I.D.E — VS Code mode</title>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#17181B}
+a{color:#7FB6FF}a:hover{color:#A9CCFF}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background: #17181B; color: #E6E7EA; font-family: Inter, 'Segoe UI', system-ui, sans-serif; font-size: 13px; overflow: hidden">
+
+  <header style="height: 40px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid #2A2C31; background: #17181B">
+    <div style="display: flex; align-items: center; gap: 8px; min-width: 0">
+      <div style="width: 22px; height: 22px; border-radius: 6px; background: #E8743B; color: #17181B; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">R</div>
+      <nav aria-label="Menu" style="display: flex; gap: 2px">
+        <button style="background: none; border: 0; color: #A9ADB6; font: inherit; padding: 6px 8px; border-radius: 6px">File</button>
+        <button style="background: none; border: 0; color: #A9ADB6; font: inherit; padding: 6px 8px; border-radius: 6px">Edit</button>
+        <button style="background: none; border: 0; color: #A9ADB6; font: inherit; padding: 6px 8px; border-radius: 6px">View</button>
+        <button style="background: none; border: 0; color: #A9ADB6; font: inherit; padding: 6px 8px; border-radius: 6px">Agent</button>
+        <button style="background: none; border: 0; color: #A9ADB6; font: inherit; padding: 6px 8px; border-radius: 6px">Help</button>
+      </nav>
+    </div>
+    <div style="flex: 1; display: flex; justify-content: center; min-width: 0">
+      <button style="width: 100%; max-width: 520px; height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-radius: 7px; border: 1px solid #2E3036; background: #1F2024; color: #9A9DA6; font: inherit; text-align: left">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="20" y1="20" x2="16.5" y2="16.5"></line></svg>
+        <span style="flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">R.I.D.E — search files, run commands, ask the agent</span>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #2A2C31; color: #A9ADB6">Ctrl K</span>
+      </button>
+    </div>
+    <div role="group" aria-label="Layout" style="display: flex; padding: 2px; gap: 2px; border-radius: 8px; background: #1F2024; border: 1px solid #2E3036">
+      <button aria-pressed="true" style="border: 0; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: #2E3036; color: #E6E7EA">Editor</button>
+      <button aria-pressed="false" style="border: 0; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: none; color: #9A9DA6">Agent</button>
+      <button aria-pressed="false" style="border: 0; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: none; color: #9A9DA6">Zen</button>
+    </div>
+  </header>
+
+  <div style="flex: 1; min-height: 0; display: flex">
+
+    <nav aria-label="Activity bar" style="width: 48px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; background: #17181B; border-right: 1px solid #2A2C31">
+      <button aria-label="Explorer" style="position: relative; width: 40px; height: 40px; border: 0; border-radius: 8px; background: #25262B; color: #E6E7EA; display: flex; align-items: center; justify-content: center">
+        <span style="position: absolute; left: -4px; top: 10px; bottom: 10px; width: 2px; border-radius: 2px; background: #E8743B"></span>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><polyline points="14 3 14 8 19 8"></polyline></svg>
+      </button>
+      <button aria-label="Search" style="width: 40px; height: 40px; border: 0; border-radius: 8px; background: none; color: #868A94; display: flex; align-items: center; justify-content: center">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="20" y1="20" x2="16.5" y2="16.5"></line></svg>
+      </button>
+      <button aria-label="Skills" style="width: 40px; height: 40px; border: 0; border-radius: 8px; background: none; color: #868A94; display: flex; align-items: center; justify-content: center">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>
+      </button>
+      <button aria-label="Models" style="width: 40px; height: 40px; border: 0; border-radius: 8px; background: none; color: #868A94; display: flex; align-items: center; justify-content: center">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="2" x2="9" y2="5"></line><line x1="15" y1="2" x2="15" y2="5"></line><line x1="9" y1="19" x2="9" y2="22"></line><line x1="15" y1="19" x2="15" y2="22"></line><line x1="2" y1="9" x2="5" y2="9"></line><line x1="2" y1="15" x2="5" y2="15"></line><line x1="19" y1="9" x2="22" y2="9"></line><line x1="19" y1="15" x2="22" y2="15"></line></svg>
+      </button>
+      <div style="flex: 1"></div>
+      <button aria-label="Settings" style="width: 40px; height: 40px; border: 0; border-radius: 8px; background: none; color: #868A94; display: flex; align-items: center; justify-content: center">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="20" y2="18"></line><circle cx="9" cy="6" r="2" fill="#17181B"></circle><circle cx="15" cy="12" r="2" fill="#17181B"></circle><circle cx="7" cy="18" r="2" fill="#17181B"></circle></svg>
+      </button>
+    </nav>
+
+    <aside aria-label="Explorer" style="width: 260px; flex: none; display: flex; flex-direction: column; background: #1B1C20; border-right: 1px solid #2A2C31; min-width: 0">
+      <div style="height: 36px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 16px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #A9ADB6">EXPLORER</span>
+        <div style="display: flex; gap: 2px">
+          <button aria-label="New file" style="width: 26px; height: 26px; border: 0; border-radius: 5px; background: none; color: #9A9DA6; display: flex; align-items: center; justify-content: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg></button>
+          <button aria-label="Refresh" style="width: 26px; height: 26px; border: 0; border-radius: 5px; background: none; color: #9A9DA6; display: flex; align-items: center; justify-content: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"></path><polyline points="20 4 20 11 13 11"></polyline></svg></button>
+          <button aria-label="Collapse all" style="width: 26px; height: 26px; border: 0; border-radius: 5px; background: none; color: #9A9DA6; display: flex; align-items: center; justify-content: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><polyline points="7 15 12 10 17 15"></polyline></svg></button>
+        </div>
+      </div>
+      <div style="padding: 0 0 4px; display: flex; flex-direction: column; font-size: 13px; overflow: auto">
+        <div style="height: 24px; display: flex; align-items: center; gap: 6px; padding: 0 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: #E6E7EA">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>R.I.D.E
+        </div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 6px; padding-left: 20px; color: #C5C8CF"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#868A94" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>crates</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 6px; padding-left: 34px; color: #C5C8CF"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#868A94" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"></polyline></svg>ride-agent</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 6px; padding-left: 34px; color: #C5C8CF"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#868A94" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"></polyline></svg>ride-core</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 6px; padding-left: 34px; color: #C5C8CF"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#868A94" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>ride-desktop</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 6px; padding-left: 48px; color: #C5C8CF"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#868A94" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>src</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 8px; padding-left: 80px; color: #C5C8CF"><span style="width: 8px; height: 8px; border-radius: 2px; background: #E8743B"></span>commands.rs<span style="margin-left: auto; margin-right: 12px; font-size: 11px; color: #E5C07B">M</span></div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 8px; padding-left: 80px; color: #E6E7EA; background: #2A2C33; box-shadow: inset 2px 0 0 #E8743B"><span style="width: 8px; height: 8px; border-radius: 2px; background: #E8743B"></span>main.rs</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 6px; padding-left: 48px; color: #C5C8CF"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#868A94" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"></polyline></svg>ui</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 8px; padding-left: 66px; color: #C5C8CF"><span style="width: 8px; height: 8px; border-radius: 2px; background: #9A9DA6"></span>Cargo.toml</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 8px; padding-left: 66px; color: #C5C8CF"><span style="width: 8px; height: 8px; border-radius: 2px; background: #E5C07B"></span>tauri.conf.json</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 6px; padding-left: 34px; color: #C5C8CF"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#868A94" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"></polyline></svg>ride-discovery</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 6px; padding-left: 34px; color: #C5C8CF"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#868A94" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"></polyline></svg>ride-moe</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 6px; padding-left: 34px; color: #C5C8CF"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#868A94" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"></polyline></svg>ride-skills</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 8px; padding-left: 34px; color: #C5C8CF"><span style="width: 8px; height: 8px; border-radius: 2px; background: #9A9DA6"></span>Cargo.toml</div>
+        <div style="height: 24px; display: flex; align-items: center; gap: 8px; padding-left: 34px; color: #C5C8CF"><span style="width: 8px; height: 8px; border-radius: 2px; background: #7FB6FF"></span>README.md</div>
+      </div>
+      <div style="flex: 1"></div>
+      <div style="border-top: 1px solid #2A2C31; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #A9ADB6">LOCAL MODELS</span>
+        <div style="display: flex; align-items: center; gap: 8px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #4FC48A"></span><span style="flex: 1">Ollama</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9A9DA6">12 ms</span></div>
+        <div style="display: flex; align-items: center; gap: 8px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #4FC48A"></span><span style="flex: 1">Rabbit MoE</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9A9DA6">4 ms</span></div>
+        <div style="display: flex; align-items: center; gap: 8px; color: #868A94"><span style="width: 7px; height: 7px; border-radius: 50%; border: 1px solid #868A94; box-sizing: border-box"></span><span style="flex: 1">LM Studio</span><span style="font-size: 11px">offline</span></div>
+      </div>
+    </aside>
+
+    <main style="flex: 1; min-width: 0; display: flex; flex-direction: column; background: #1F2024">
+      <div role="tablist" aria-label="Open editors" style="height: 36px; flex: none; display: flex; align-items: stretch; background: #1B1C20; border-bottom: 1px solid #2A2C31">
+        <button role="tab" aria-selected="true" style="display: flex; align-items: center; gap: 8px; padding: 0 12px 0 14px; border: 0; border-right: 1px solid #2A2C31; background: #1F2024; color: #E6E7EA; font: inherit; box-shadow: inset 0 2px 0 #E8743B"><span style="width: 8px; height: 8px; border-radius: 2px; background: #E8743B"></span>main.rs<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9A9DA6" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="18" y1="6" x2="6" y2="18"></line></svg></button>
+        <button role="tab" aria-selected="false" style="display: flex; align-items: center; gap: 8px; padding: 0 12px 0 14px; border: 0; border-right: 1px solid #2A2C31; background: none; color: #9A9DA6; font: inherit"><span style="width: 8px; height: 8px; border-radius: 2px; background: #E8743B"></span>commands.rs<span style="width: 8px; height: 8px; border-radius: 50%; background: #C5C8CF; margin: 0 3px"></span></button>
+        <button role="tab" aria-selected="false" style="display: flex; align-items: center; gap: 8px; padding: 0 12px 0 14px; border: 0; border-right: 1px solid #2A2C31; background: none; color: #9A9DA6; font: inherit"><span style="width: 8px; height: 8px; border-radius: 2px; background: #9A9DA6"></span>Cargo.toml</button>
+        <div style="flex: 1"></div>
+        <div style="display: flex; align-items: center; gap: 2px; padding: 0 8px">
+          <button aria-label="Split editor" style="width: 28px; height: 28px; border: 0; border-radius: 6px; background: none; color: #9A9DA6; display: flex; align-items: center; justify-content: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="12" y1="4" x2="12" y2="20"></line></svg></button>
+          <button aria-label="Toggle agent panel" style="width: 28px; height: 28px; border: 0; border-radius: 6px; background: #2A2C31; color: #E6E7EA; display: flex; align-items: center; justify-content: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="15" y1="4" x2="15" y2="20"></line></svg></button>
+        </div>
+      </div>
+      <div style="height: 26px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 16px; font-size: 12px; color: #9A9DA6">
+        <span>crates</span><span aria-hidden="true">›</span><span>ride-desktop</span><span aria-hidden="true">›</span><span>src</span><span aria-hidden="true">›</span><span style="color: #E6E7EA">main.rs</span><span aria-hidden="true">›</span><span>fn main</span>
+      </div>
+      <div style="flex: 1; min-height: 0; display: flex; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; line-height: 21px; overflow: hidden">
+        <div aria-hidden="true" style="width: 56px; flex: none; text-align: right; padding: 6px 14px 0 0; box-sizing: border-box; color: #5F636D; display: flex; flex-direction: column">
+          <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span style="color: #E6E7EA">16</span><span>17</span><span>18</span><span>19</span><span>20</span><span>21</span><span>22</span><span>23</span><span>24</span><span>25</span><span>26</span><span>27</span><span>28</span>
+        </div>
+        <pre style="margin: 0; padding: 6px 0 0; flex: 1; min-width: 0; color: #C5C8CF; font: inherit; white-space: pre; overflow: hidden"><span style="color: #7C818C">// Prevents an additional console window on Windows release builds.</span>
+<span style="color: #868A94">#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]</span>
+
+<span style="color: #D4A0FF">mod</span> commands;
+
+<span style="color: #D4A0FF">use</span> commands::<span style="color: #F2C46D">DesktopState</span>;
+<span style="color: #D4A0FF">use</span> std::sync::<span style="color: #F2C46D">Mutex</span>;
+<span style="color: #D4A0FF">use</span> tauri::<span style="color: #F2C46D">Emitter</span>;
+<span style="color: #D4A0FF">use</span> tracing::info;
+
+<span style="color: #D4A0FF">fn</span> <span style="color: #7FB6FF">main</span>() {
+    tracing_subscriber::fmt::<span style="color: #7FB6FF">init</span>();
+
+    <span style="color: #5FD0C5">info!</span>(<span style="color: #A8D886">"Starting {} v{}"</span>, ride_core::RIDE_APP_NAME, ride_core::RIDE_VERSION);
+
+<span style="display: block; background: #25262C">    tauri::<span style="color: #F2C46D">Builder</span>::<span style="color: #7FB6FF">default</span>()</span>        .<span style="color: #7FB6FF">manage</span>(<span style="color: #F2C46D">Mutex</span>::<span style="color: #7FB6FF">new</span>(<span style="color: #F2C46D">DesktopState</span>::<span style="color: #7FB6FF">default</span>()))
+        .<span style="color: #7FB6FF">setup</span>(|app| {
+            <span style="color: #D4A0FF">let</span> handle = app.<span style="color: #7FB6FF">handle</span>().<span style="color: #7FB6FF">clone</span>();
+            tauri::async_runtime::<span style="color: #7FB6FF">spawn</span>(<span style="color: #D4A0FF">async move</span> {
+                <span style="color: #D4A0FF">let</span> detector = ride_discovery::<span style="color: #F2C46D">ModelDetector</span>::<span style="color: #7FB6FF">default</span>();
+                detector.<span style="color: #7FB6FF">run_discovery_loop</span>(tx, cancel, <span style="color: #F2C46D">Duration</span>::<span style="color: #7FB6FF">from_secs</span>(<span style="color: #F7A072">2</span>)).<span style="color: #D4A0FF">await</span>;
+            });
+            <span style="color: #F2C46D">Ok</span>(())
+        })
+        .<span style="color: #7FB6FF">invoke_handler</span>(tauri::<span style="color: #5FD0C5">generate_handler!</span>[
+            commands::get_model_status,
+            commands::send_agent_message,</pre>
+      </div>
+    </main>
+
+    <aside aria-label="Agent" style="width: 384px; flex: none; display: flex; flex-direction: column; background: #1B1C20; border-left: 1px solid #2A2C31; min-width: 0">
+      <div style="height: 36px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px 0 12px; border-bottom: 1px solid #2A2C31">
+        <div role="tablist" aria-label="Agent panel" style="display: flex; gap: 2px">
+          <button role="tab" aria-selected="true" style="border: 0; font: inherit; font-size: 12px; font-weight: 500; padding: 5px 10px; border-radius: 6px; background: #2A2C31; color: #E6E7EA">Chat</button>
+          <button role="tab" aria-selected="false" style="display: flex; align-items: center; gap: 6px; border: 0; font: inherit; font-size: 12px; font-weight: 500; padding: 5px 10px; border-radius: 6px; background: none; color: #9A9DA6">Changes<span style="font-size: 11px; padding: 0 6px; border-radius: 9px; background: #E8743B; color: #17181B; font-weight: 600">1</span></button>
+        </div>
+        <div style="flex: 1"></div>
+        <button aria-label="New chat" style="width: 28px; height: 28px; border: 0; border-radius: 6px; background: none; color: #9A9DA6; display: flex; align-items: center; justify-content: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></button>
+      </div>
+
+      <div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 16px; padding: 16px">
+        <div style="align-self: flex-end; max-width: 88%; padding: 9px 12px; border-radius: 12px 12px 4px 12px; background: #2A2C33; line-height: 1.5">Add a <code style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #F2C46D">read_dir</code> command so the explorer shows the real workspace.</div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #9A9DA6">
+            <span style="width: 18px; height: 18px; border-radius: 5px; background: #E8743B; color: #17181B; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600">R</span>
+            <span style="color: #E6E7EA; font-weight: 500">Agent</span><span>qwen2.5-coder:7b</span>
+          </div>
+          <button style="align-self: flex-start; display: flex; align-items: center; gap: 6px; border: 0; background: none; padding: 0; font: inherit; font-size: 12px; color: #9A9DA6"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"></polyline></svg>Thought for 3 steps</button>
+          <div style="display: flex; flex-direction: column; border: 1px solid #2E3036; border-radius: 8px; overflow: hidden; font-size: 12px">
+            <div style="display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid #2E3036"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4FC48A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="5 12 10 17 19 7"></polyline></svg><span style="font-family: 'JetBrains Mono', monospace; color: #C5C8CF">read_file</span><span style="color: #9A9DA6; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">src/commands.rs · 1–420</span></div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid #2E3036"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4FC48A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="5 12 10 17 19 7"></polyline></svg><span style="font-family: 'JetBrains Mono', monospace; color: #C5C8CF">search</span><span style="color: #9A9DA6">"generate_handler" · 2 hits</span></div>
+            <div style="display: flex; align-items: center; gap: 8px; padding: 7px 10px"><span style="width: 13px; height: 13px; border-radius: 50%; border: 2px solid #E8743B; border-right-color: transparent; box-sizing: border-box"></span><span style="font-family: 'JetBrains Mono', monospace; color: #C5C8CF">edit_file</span><span style="color: #9A9DA6">src/commands.rs</span></div>
+          </div>
+          <p style="margin: 0; line-height: 1.6; color: #C5C8CF">I added <code style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #F2C46D">read_dir</code> to <code style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #F2C46D">commands.rs</code> and registered it in <code style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #F2C46D">main.rs</code>. It skips <code style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #F2C46D">target/</code> and <code style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #F2C46D">node_modules/</code>.</p>
+          <div style="border: 1px solid #2E3036; border-radius: 8px; overflow: hidden; background: #1F2024">
+            <div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #2E3036; font-size: 12px">
+              <span style="width: 8px; height: 8px; border-radius: 2px; background: #E8743B"></span><span style="flex: 1">commands.rs</span><span style="font-family: 'JetBrains Mono', monospace; color: #4FC48A">+18</span><span style="font-family: 'JetBrains Mono', monospace; color: #F1707B">−0</span>
+            </div>
+            <pre style="margin: 0; padding: 6px 0; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; line-height: 19px; color: #C5C8CF; overflow: hidden"><span style="display: block; padding: 0 10px; color: #9A9DA6">@@ -416,6 +416,24 @@</span><span style="display: block; padding: 0 10px; background: #1E3328; color: #A8E2BE">+#[tauri::command]</span><span style="display: block; padding: 0 10px; background: #1E3328; color: #A8E2BE">+pub async fn read_dir(path: String)</span><span style="display: block; padding: 0 10px; background: #1E3328; color: #A8E2BE">+    -&gt; Result&lt;Vec&lt;DirEntry&gt;, String&gt; {</span></pre>
+            <div style="display: flex; gap: 8px; padding: 8px 10px; border-top: 1px solid #2E3036">
+              <button style="flex: 1; height: 30px; border: 0; border-radius: 6px; background: #E8743B; color: #17181B; font: inherit; font-size: 12px; font-weight: 600">Apply</button>
+              <button style="flex: 1; height: 30px; border: 1px solid #2E3036; border-radius: 6px; background: none; color: #E6E7EA; font: inherit; font-size: 12px">Discard</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex: none; padding: 12px">
+        <div style="border: 1px solid #3A3D44; border-radius: 10px; background: #1F2024; display: flex; flex-direction: column">
+          <div style="display: flex; gap: 6px; padding: 8px 10px 0">
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 11px; padding: 2px 7px; border-radius: 5px; background: #2A2C31; color: #C5C8CF"><span style="width: 6px; height: 6px; border-radius: 2px; background: #E8743B"></span>main.rs</span>
+            <span style="font-size: 11px; padding: 2px 7px; border-radius: 5px; background: #2A2C31; color: #C5C8CF">rust-expert</span>
+          </div>
+          <label for="composer" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message the agent</label>
+          <textarea id="composer" rows="2" placeholder="Ask, or describe a change…  @ to add files" style="resize: none; border: 0; outline: none; background: none; color: #E6E7EA; font: inherit; padding: 8px 10px; line-height: 1.5"></textarea>
+          <div style="display: flex; align-items: center; gap: 8px; padding: 0 8px 8px 10px">
+            <button style="display: flex; align-items: center; gap: 6px; border: 0; background: none; padding: 4px 6px; border-radius: 6px; font: inherit; font-size: 12px; color: #9A9DA6"><span style="width: 6px; height: 6px; border-radius: 50%; background: #4FC48A"></span>qwen2.5-coder:7b<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg></button>
+            <div style="flex: 1"></div>
+            <button aria-label="Send" style="width: 30px; height: 30px; border: 0; border-radius: 8px; background: #E8743B; color: #17181B; display: flex; align-items: center; justify-content: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <footer style="height: 24px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 6px; font-size: 12px; color: #A9ADB6; background: #17181B; border-top: 1px solid #2A2C31">
+    <span style="display: flex; align-items: center; gap: 6px; padding: 0 8px; height: 100%"><span style="width: 7px; height: 7px; border-radius: 50%; background: #4FC48A"></span>Ollama · 12 ms</span>
+    <span style="padding: 0 8px">qwen2.5-coder:7b</span>
+    <span style="padding: 0 8px">1 pending change</span>
+    <div style="flex: 1"></div>
+    <span style="padding: 0 8px">Ln 16, Col 5</span>
+    <span style="padding: 0 8px">Spaces: 4</span>
+    <span style="padding: 0 8px">UTF-8</span>
+    <span style="padding: 0 8px">Rust</span>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#E8743B","options":["#E8743B","#5B9BFF","#4FC48A","#C792EA"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { accent: this.props.accent ?? '#E8743B' };
+  }
+}
+</script>
+</body>
+</html>

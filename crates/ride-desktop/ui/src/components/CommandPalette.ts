@@ -1,265 +1,184 @@
-import type { UiLayout } from '../types';
+import { icon, type IconName } from '../icons';
+import { esc } from '../util';
 
 export interface CommandItem {
   id: string;
+  group: string;
   label: string;
   sublabel?: string;
-  icon: string;
-  action: () => void;
+  icon: IconName;
+  keybinding?: string;
+  run: () => void;
 }
 
+/** Ctrl+K palette: filter commands, or send the typed text to the agent. */
 export class CommandPalette {
   private overlay: HTMLElement;
   private input: HTMLInputElement;
   private list: HTMLElement;
-  private isOpen: boolean = false;
   private items: CommandItem[] = [];
-  private selectedIndex: number = 0;
-  private onSelectLayout: (layout: UiLayout) => void;
-  private onPromptAgent: (prompt: string) => void;
-  private onOpenFile?: () => void;
-  private onSaveFile?: () => void;
-  private onNewFile?: () => void;
+  private matched: CommandItem[] = [];
+  private selected = 0;
+  private previousFocus: HTMLElement | null = null;
+  private onAsk: (prompt: string) => void;
 
-  constructor(
-    onSelectLayout: (layout: UiLayout) => void,
-    onPromptAgent: (prompt: string) => void,
-    onOpenFile?: () => void,
-    onSaveFile?: () => void,
-    onNewFile?: () => void
-  ) {
-    this.onSelectLayout = onSelectLayout;
-    this.onPromptAgent = onPromptAgent;
-    this.onOpenFile = onOpenFile;
-    this.onSaveFile = onSaveFile;
-    this.onNewFile = onNewFile;
-
+  constructor(onAsk: (prompt: string) => void) {
+    this.onAsk = onAsk;
     this.overlay = document.createElement('div');
-    this.overlay.className = 'command-palette-overlay';
-    this.overlay.style.display = 'none';
-
+    this.overlay.className = 'palette-overlay';
+    this.overlay.hidden = true;
     this.overlay.innerHTML = `
-      <div class="command-palette-modal">
-        <div class="palette-input-wrapper">
-          <span class="palette-icon">✧</span>
-          <input type="text" class="palette-input" placeholder="Type a command or ask R.I.D.E AI... (Ctrl+K)" />
-          <span class="palette-kbd">Esc</span>
+      <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+        <div class="palette-input-row">
+          ${icon('search')}
+          <label class="sr-only" for="palette-input">Command</label>
+          <input id="palette-input" type="text" placeholder="Type a command, or ask the agent…" spellcheck="false" autocomplete="off" role="combobox" aria-controls="palette-list" aria-expanded="true">
+          <span class="kbd">Esc</span>
         </div>
-        <div class="palette-results"></div>
+        <div class="palette-list" id="palette-list" role="listbox"></div>
       </div>
     `;
-
-    this.input = this.overlay.querySelector<HTMLInputElement>('.palette-input')!;
-    this.list = this.overlay.querySelector<HTMLElement>('.palette-results')!;
-
-    this.initDefaultItems();
-    this.attachEvents();
+    this.input = this.overlay.querySelector('input')!;
+    this.list = this.overlay.querySelector('.palette-list')!;
     document.body.appendChild(this.overlay);
+
+    this.overlay.addEventListener('mousedown', (e) => {
+      if (e.target === this.overlay) this.close();
+    });
+    this.input.addEventListener('input', () => {
+      this.selected = 0;
+      this.render();
+    });
+    this.input.addEventListener('keydown', (e) => this.onKey(e));
+    this.list.addEventListener('click', (e) => {
+      const el = (e.target as HTMLElement).closest<HTMLElement>('[data-idx]');
+      if (el) {
+        this.selected = Number(el.dataset.idx);
+        this.execute();
+      }
+    });
+    this.list.addEventListener('mousemove', (e) => {
+      const el = (e.target as HTMLElement).closest<HTMLElement>('[data-idx]');
+      if (el && Number(el.dataset.idx) !== this.selected) {
+        this.selected = Number(el.dataset.idx);
+        this.updateSelection();
+      }
+    });
   }
 
-  public open(): void {
-    this.isOpen = true;
-    this.overlay.style.display = 'flex';
-    this.input.value = '';
-    this.selectedIndex = 0;
-    this.renderItems('');
-    setTimeout(() => this.input.focus(), 50);
+  public setCommands(items: CommandItem[]): void {
+    this.items = items;
+  }
+
+  public get isOpen(): boolean {
+    return !this.overlay.hidden;
+  }
+
+  public open(initial = ''): void {
+    this.previousFocus = document.activeElement as HTMLElement | null;
+    this.overlay.hidden = false;
+    this.input.value = initial;
+    this.selected = 0;
+    this.render();
+    this.input.focus();
   }
 
   public close(): void {
-    this.isOpen = false;
-    this.overlay.style.display = 'none';
+    if (this.overlay.hidden) return;
+    this.overlay.hidden = true;
+    this.previousFocus?.focus?.();
   }
 
   public toggle(): void {
-    if (this.isOpen) {
+    if (this.isOpen) this.close();
+    else this.open();
+  }
+
+  private score(item: CommandItem, q: string): number {
+    const label = item.label.toLowerCase();
+    if (label.startsWith(q)) return 3;
+    if (label.includes(q)) return 2;
+    if (item.group.toLowerCase().includes(q) || item.sublabel?.toLowerCase().includes(q)) return 1;
+    // subsequence match ("tglag" → "Toggle agent panel")
+    let i = 0;
+    for (const ch of label) if (ch === q[i]) i++;
+    return i === q.length ? 0.5 : 0;
+  }
+
+  private render(): void {
+    const q = this.input.value.trim().toLowerCase();
+    this.matched = q
+      ? this.items
+          .map((item) => ({ item, s: this.score(item, q) }))
+          .filter((x) => x.s > 0)
+          .sort((a, b) => b.s - a.s)
+          .map((x) => x.item)
+      : this.items;
+
+    const rows: string[] = [];
+    let lastGroup = '';
+    this.matched.forEach((item, idx) => {
+      if (!q && item.group !== lastGroup) {
+        rows.push(`<div class="palette-group">${esc(item.group)}</div>`);
+        lastGroup = item.group;
+      }
+      rows.push(this.row(idx, item.icon, item.label, item.sublabel, item.keybinding));
+    });
+    if (q) {
+      rows.push(this.row(this.matched.length, 'sparkle', `Ask the agent: “${this.input.value.trim()}”`, 'Send this as a prompt to the local model'));
+    }
+    if (this.selected > this.count() - 1) this.selected = Math.max(0, this.count() - 1);
+    this.list.innerHTML = rows.join('');
+    this.updateSelection();
+  }
+
+  private row(idx: number, ic: IconName, label: string, sub?: string, kb?: string): string {
+    return `<button type="button" class="palette-item" role="option" data-idx="${idx}" id="pi-${idx}">
+      ${icon(ic)}<span class="pi-text"><span class="pi-label">${esc(label)}</span>${sub ? `<span class="pi-sub">${esc(sub)}</span>` : ''}</span>
+      ${kb ? `<span class="kbd">${esc(kb)}</span>` : ''}
+    </button>`;
+  }
+
+  private count(): number {
+    return this.matched.length + (this.input.value.trim() ? 1 : 0);
+  }
+
+  private updateSelection(): void {
+    this.list.querySelectorAll<HTMLElement>('.palette-item').forEach((el) => {
+      const on = Number(el.dataset.idx) === this.selected;
+      el.classList.toggle('active', on);
+      el.setAttribute('aria-selected', String(on));
+      if (on) {
+        el.scrollIntoView({ block: 'nearest' });
+        this.input.setAttribute('aria-activedescendant', el.id);
+      }
+    });
+  }
+
+  private onKey(e: KeyboardEvent): void {
+    const n = this.count();
+    if (e.key === 'Escape') {
+      e.preventDefault();
       this.close();
-    } else {
-      this.open();
+    } else if (e.key === 'ArrowDown' && n > 0) {
+      e.preventDefault();
+      this.selected = (this.selected + 1) % n;
+      this.updateSelection();
+    } else if (e.key === 'ArrowUp' && n > 0) {
+      e.preventDefault();
+      this.selected = (this.selected - 1 + n) % n;
+      this.updateSelection();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      this.execute();
     }
   }
 
-  private initDefaultItems(): void {
-    this.items = [
-      {
-        id: 'file-save',
-        label: 'File: Save Active File (Ctrl+S)',
-        sublabel: 'Persist current CodeMirror buffer directly to disk via Rust IPC',
-        icon: '💾',
-        action: () => {
-          this.close();
-          this.onSaveFile?.();
-        },
-      },
-      {
-        id: 'file-open',
-        label: 'File: Open File by Path (Ctrl+O)',
-        sublabel: 'Load source file from disk into editor',
-        icon: '📂',
-        action: () => {
-          this.close();
-          this.onOpenFile?.();
-        },
-      },
-      {
-        id: 'file-new',
-        label: 'File: New File Buffer (Ctrl+N)',
-        sublabel: 'Create a new scratch buffer for manual editing',
-        icon: '✚',
-        action: () => {
-          this.close();
-          this.onNewFile?.();
-        },
-      },
-      {
-        id: 'layout-vscode',
-        label: 'Switch Layout: VS Code',
-        sublabel: 'Full IDE with activity bar, explorer, editor & agent dock',
-        icon: '⊞',
-        action: () => this.onSelectLayout('vs_code'),
-      },
-      {
-        id: 'layout-claude',
-        label: 'Switch Layout: Claude Code',
-        sublabel: 'Terminal-first agent stream with live diffs & reasoning',
-        icon: '❯_',
-        action: () => this.onSelectLayout('claude_code'),
-      },
-      {
-        id: 'layout-codex',
-        label: 'Switch Layout: Codex Zen',
-        sublabel: 'Distraction-free canvas with floating command overlay',
-        icon: '✧',
-        action: () => this.onSelectLayout('codex'),
-      },
-      {
-        id: 'ask-analyze',
-        label: 'Ask AI: Analyze current file syntax & lifetime safety',
-        sublabel: 'Invokes local model with rust-expert skill',
-        icon: '🦀',
-        action: () => this.onPromptAgent('Review the current Rust code for lifetime and borrowing soundness.'),
-      },
-      {
-        id: 'ask-diff',
-        label: 'Ask AI: Generate unit tests for active commands',
-        sublabel: 'Proposes tests with previewable unified diff',
-        icon: '🧪',
-        action: () => this.onPromptAgent('Generate comprehensive unit tests for the active commands module.'),
-      },
-    ];
-  }
-
-  private renderItems(query: string): void {
-    const q = query.toLowerCase().trim();
-    const matched = this.items.filter((item) => {
-      if (!q) return true;
-      return (
-        item.label.toLowerCase().includes(q) ||
-        (item.sublabel && item.sublabel.toLowerCase().includes(q))
-      );
-    });
-
-    if (matched.length === 0) {
-      // Dynamic AI prompt option
-      this.list.innerHTML = `
-        <div class="palette-item active" data-action="ai-query">
-          <span class="item-icon">⚡</span>
-          <div class="item-text">
-            <div class="item-label">Ask R.I.D.E Agent: "${this.escapeHtml(query)}"</div>
-            <div class="item-sub">Execute autonomous agent with loaded skills</div>
-          </div>
-        </div>
-      `;
-      return;
-    }
-
-    this.list.innerHTML = matched
-      .map((item, idx) => {
-        const isSelected = idx === this.selectedIndex;
-        return `
-        <div class="palette-item ${isSelected ? 'active' : ''}" data-idx="${idx}">
-          <span class="item-icon">${item.icon}</span>
-          <div class="item-text">
-            <div class="item-label">${this.escapeHtml(item.label)}</div>
-            ${item.sublabel ? `<div class="item-sub">${this.escapeHtml(item.sublabel)}</div>` : ''}
-          </div>
-        </div>
-      `;
-      })
-      .join('');
-  }
-
-  private attachEvents(): void {
-    this.overlay.addEventListener('click', (e) => {
-      if (e.target === this.overlay) {
-        this.close();
-      }
-    });
-
-    this.input.addEventListener('input', () => {
-      this.selectedIndex = 0;
-      this.renderItems(this.input.value);
-    });
-
-    this.input.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        this.close();
-        return;
-      }
-
-      const itemsCount = this.list.querySelectorAll('.palette-item').length;
-
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        this.selectedIndex = (this.selectedIndex + 1) % itemsCount;
-        this.renderItems(this.input.value);
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        this.selectedIndex = (this.selectedIndex - 1 + itemsCount) % itemsCount;
-        this.renderItems(this.input.value);
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        this.executeCurrent();
-      }
-    });
-
-    this.list.addEventListener('click', (e) => {
-      const itemEl = (e.target as HTMLElement).closest<HTMLElement>('.palette-item');
-      if (itemEl) {
-        const idx = itemEl.getAttribute('data-idx');
-        if (idx !== null) {
-          this.selectedIndex = Number(idx);
-          this.executeCurrent();
-        } else if (itemEl.getAttribute('data-action') === 'ai-query') {
-          this.executeCurrent();
-        }
-      }
-    });
-  }
-
-  private executeCurrent(): void {
+  private execute(): void {
+    const item = this.matched[this.selected];
     const q = this.input.value.trim();
-    const matched = this.items.filter((item) => {
-      if (!q) return true;
-      return (
-        item.label.toLowerCase().includes(q.toLowerCase()) ||
-        (item.sublabel && item.sublabel.toLowerCase().includes(q.toLowerCase()))
-      );
-    });
-
-    if (matched.length > 0 && matched[this.selectedIndex]) {
-      const selected = matched[this.selectedIndex];
-      this.close();
-      selected.action();
-    } else if (q) {
-      this.close();
-      this.onPromptAgent(q);
-    }
-  }
-
-  private escapeHtml(text: string): string {
-    const div = document.createElement('div');
-    div.innerText = text;
-    return div.innerHTML;
+    this.close();
+    if (item) item.run();
+    else if (q) this.onAsk(q);
   }
 }

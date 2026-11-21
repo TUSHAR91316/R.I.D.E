@@ -20,6 +20,11 @@ fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(DesktopState::default()))
         .setup(|app| {
+            // Pin the workspace root (and cwd) before any command runs so that
+            // relative paths from the UI and the agent's tools agree.
+            let root = commands::workspace_root();
+            info!("Workspace root: {}", root.display());
+
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let (event_tx, mut event_rx) = tokio::sync::broadcast::channel(32);
@@ -42,6 +47,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::get_model_status,
             commands::send_agent_message,
+            commands::cancel_agent_turn,
+            commands::respond_approval,
             commands::get_active_skills,
             commands::toggle_skill,
             commands::get_diff_preview,
@@ -53,6 +60,10 @@ fn main() {
             commands::get_moe_status,
             commands::save_file,
             commands::read_file,
+            commands::get_workspace_info,
+            commands::open_workspace,
+            commands::list_dir,
+            commands::search_workspace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running R.I.D.E desktop application");

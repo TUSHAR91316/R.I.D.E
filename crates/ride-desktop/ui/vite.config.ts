@@ -16,7 +16,8 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          codemirror: ['codemirror', '@codemirror/lang-rust', '@codemirror/theme-one-dark', '@codemirror/state'],
+          // Editor core only; language packs stay lazily-loaded chunks.
+          codemirror: ['codemirror', '@codemirror/view', '@codemirror/state', '@codemirror/language', '@codemirror/commands'],
         },
       },
     },

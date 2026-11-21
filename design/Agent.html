@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>R.I.D.E — Agent mode</title>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#17181B}
+a{color:#7FB6FF}a:hover{color:#A9CCFF}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background: #17181B; color: #E6E7EA; font-family: Inter, 'Segoe UI', system-ui, sans-serif; font-size: 13px; overflow: hidden">
+
+  <header style="height: 40px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid #2A2C31">
+    <div style="width: 22px; height: 22px; border-radius: 6px; background: #E8743B; color: #17181B; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">R</div>
+    <span style="font-weight: 500">Agent session</span>
+    <span style="color: #9A9DA6">R.I.D.E · master</span>
+    <div style="flex: 1"></div>
+    <span style="display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 9px; border-radius: 12px; background: #1E3328; color: #A8E2BE"><span style="width: 6px; height: 6px; border-radius: 50%; background: #4FC48A"></span>Ollama online</span>
+    <div role="group" aria-label="Layout" style="display: flex; padding: 2px; gap: 2px; border-radius: 8px; background: #1F2024; border: 1px solid #2E3036">
+      <button aria-pressed="false" style="border: 0; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: none; color: #9A9DA6">Editor</button>
+      <button aria-pressed="true" style="border: 0; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: #2E3036; color: #E6E7EA">Agent</button>
+      <button aria-pressed="false" style="border: 0; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: none; color: #9A9DA6">Zen</button>
+    </div>
+  </header>
+
+  <div style="flex: 1; min-height: 0; display: flex; flex-wrap: wrap">
+
+    <section aria-label="Session stream" style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; background: #1A1B1F">
+      <div style="flex: 1; min-height: 0; overflow: hidden; padding: 28px 0">
+        <div style="max-width: 820px; margin: 0 auto; padding: 0 32px; display: flex; flex-direction: column; gap: 18px; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; line-height: 1.65">
+
+          <div style="display: flex; gap: 10px; padding: 10px 14px; border-radius: 8px; background: #222328; border: 1px solid #2E3036">
+            <span style="color: #E8743B">❯</span>
+            <span style="color: #E6E7EA">refactor commands.rs so read_file and save_file resolve paths against the workspace root</span>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 4px; color: #9A9DA6">
+            <div style="display: flex; gap: 10px"><span style="color: #868A94">✻</span><span>Thinking — the UI passes paths like crates/ride-desktop/src/main.rs, but the process cwd is crates/ride-desktop under tauri dev, so relative reads miss.</span></div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 2px">
+            <div style="display: flex; gap: 10px"><span style="color: #4FC48A">●</span><span><span style="color: #E6E7EA; font-weight: 500">Read</span><span style="color: #9A9DA6">(crates/ride-desktop/src/commands.rs)</span></span></div>
+            <div style="display: flex; gap: 10px; color: #868A94; padding-left: 4px"><span>└</span><span>770 lines</span></div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 2px">
+            <div style="display: flex; gap: 10px"><span style="color: #4FC48A">●</span><span><span style="color: #E6E7EA; font-weight: 500">Search</span><span style="color: #9A9DA6">("std::fs::", crates/ride-desktop)</span></span></div>
+            <div style="display: flex; gap: 10px; color: #868A94; padding-left: 4px"><span>└</span><span>3 matches in 1 file</span></div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <div style="display: flex; gap: 10px"><span style="color: #E8743B">●</span><span><span style="color: #E6E7EA; font-weight: 500">Edit</span><span style="color: #9A9DA6">(crates/ride-desktop/src/commands.rs)</span></span><span style="margin-left: auto; color: #4FC48A">+14</span><span style="color: #F1707B">−3</span></div>
+            <pre style="margin: 0 0 0 22px; padding: 8px 0; border-radius: 8px; border: 1px solid #2E3036; background: #1F2024; font: inherit; font-size: 12.5px; line-height: 20px; overflow: hidden"><span style="display: block; padding: 0 12px; color: #9A9DA6">@@ -416,8 +416,19 @@</span><span style="display: block; padding: 0 12px; color: #C5C8CF"> #[tauri::command]</span><span style="display: block; padding: 0 12px; background: #3A2226; color: #F5B5BB">-pub async fn read_file(path: String) -&gt; Result&lt;String, String&gt; {</span><span style="display: block; padding: 0 12px; background: #3A2226; color: #F5B5BB">-    let clean_path = path.trim().trim_matches('"');</span><span style="display: block; padding: 0 12px; background: #1E3328; color: #A8E2BE">+pub async fn read_file(path: String) -&gt; Result&lt;String, String&gt; {</span><span style="display: block; padding: 0 12px; background: #1E3328; color: #A8E2BE">+    let full = resolve_in_workspace(&amp;path)?;</span><span style="display: block; padding: 0 12px; background: #1E3328; color: #A8E2BE">+    tokio::fs::read_to_string(&amp;full).await</span><span style="display: block; padding: 0 12px; background: #1E3328; color: #A8E2BE">+        .map_err(|e| format!("Failed to read '{}': {e}", full.display()))</span><span style="display: block; padding: 0 12px; color: #C5C8CF"> }</span></pre>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 8px; border: 1px solid #5A4630; background: #2A231C">
+            <div style="display: flex; align-items: center; gap: 8px; color: #F2C46D; font-family: Inter, system-ui, sans-serif; font-weight: 500">Run shell command?</div>
+            <code style="color: #E6E7EA">cargo test -p ride-desktop</code>
+            <div style="display: flex; gap: 8px; margin-top: 4px; font-family: Inter, system-ui, sans-serif">
+              <button style="height: 30px; padding: 0 14px; border: 0; border-radius: 6px; background: #E8743B; color: #17181B; font: inherit; font-size: 12px; font-weight: 600">Allow once</button>
+              <button style="height: 30px; padding: 0 14px; border: 1px solid #3A3D44; border-radius: 6px; background: none; color: #E6E7EA; font: inherit; font-size: 12px">Deny</button>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 10px; color: #9A9DA6"><span style="width: 12px; height: 12px; margin-top: 5px; border-radius: 50%; border: 2px solid #E8743B; border-right-color: transparent; box-sizing: border-box; flex: none"></span><span>Waiting for approval · 41.2 tok/s · 6.1 s</span></div>
+        </div>
+      </div>
+
+      <div style="flex: none; padding: 0 32px 20px">
+        <div style="max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px">
+          <div style="display: flex; align-items: center; gap: 10px; padding: 0 14px; height: 48px; border-radius: 10px; border: 1px solid #3A3D44; background: #1F2024; font-family: 'JetBrains Mono', Consolas, monospace">
+            <span style="color: #E8743B">❯</span>
+            <label for="cli" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Task or command</label>
+            <input id="cli" placeholder="Describe a task, or type / for commands" style="flex: 1; border: 0; outline: none; background: none; color: #E6E7EA; font: inherit">
+            <span style="font-size: 11px; color: #868A94">⏎ run</span>
+          </div>
+          <div style="display: flex; gap: 16px; padding: 0 4px; font-size: 12px; color: #868A94">
+            <span>/clear  reset session</span><span>/diff  review changes</span><span>↑  history</span><div style="flex: 1"></div><span>qwen2.5-coder:7b · 8k ctx</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside aria-label="Changes" style="flex: 1 1 400px; max-width: 440px; min-width: 0; display: flex; flex-direction: column; background: #1B1C20; border-left: 1px solid #2A2C31">
+      <div style="height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid #2A2C31">
+        <span style="font-weight: 600">Changes</span>
+        <span style="font-size: 11px; padding: 0 7px; border-radius: 9px; background: #2A2C31; color: #C5C8CF">2 files</span>
+        <div style="flex: 1"></div>
+        <button style="height: 28px; padding: 0 12px; border: 0; border-radius: 6px; background: #E8743B; color: #17181B; font: inherit; font-size: 12px; font-weight: 600">Apply all</button>
+      </div>
+      <div style="display: flex; flex-direction: column; padding: 8px">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 8px; background: #25262B">
+          <span style="width: 8px; height: 8px; border-radius: 2px; background: #E8743B"></span>
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span>commands.rs</span><span style="font-size: 11px; color: #868A94">crates/ride-desktop/src</span></div>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #4FC48A">+14</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #F1707B">−3</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 8px">
+          <span style="width: 8px; height: 8px; border-radius: 2px; background: #E8743B"></span>
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column"><span>main.rs</span><span style="font-size: 11px; color: #868A94">crates/ride-desktop/src</span></div>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #4FC48A">+2</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #F1707B">−0</span>
+        </div>
+      </div>
+      <div style="margin: 0 16px; border-top: 1px solid #2A2C31"></div>
+      <div style="padding: 14px 16px 8px; display: flex; flex-direction: column; gap: 4px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #A9ADB6">SESSION</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 0 16px">
+        <div style="padding: 10px 12px; border-radius: 8px; border: 1px solid #2E3036; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 11px; color: #9A9DA6">Tool calls</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 16px">3</span></div>
+        <div style="padding: 10px 12px; border-radius: 8px; border: 1px solid #2E3036; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 11px; color: #9A9DA6">Context used</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 16px">5.2k / 8k</span></div>
+      </div>
+      <div style="padding: 16px; display: flex; flex-direction: column; gap: 8px">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #A9ADB6">ACTIVE SKILLS</span>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px">
+          <span style="font-size: 12px; padding: 3px 9px; border-radius: 6px; background: #2A2C31; color: #C5C8CF">rust-expert</span>
+          <span style="font-size: 12px; padding: 3px 9px; border-radius: 6px; background: #2A2C31; color: #C5C8CF">systematic-debugging</span>
+          <span style="font-size: 12px; padding: 3px 9px; border-radius: 6px; border: 1px dashed #3A3D44; color: #868A94">+ 3 idle</span>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <footer style="height: 24px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 6px; font-size: 12px; color: #A9ADB6; border-top: 1px solid #2A2C31">
+    <span style="display: flex; align-items: center; gap: 6px; padding: 0 8px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #4FC48A"></span>Ollama · 12 ms</span>
+    <span style="padding: 0 8px">qwen2.5-coder:7b</span>
+    <span style="padding: 0 8px; color: #E8743B">41.2 tok/s</span>
+    <div style="flex: 1"></div>
+    <span style="padding: 0 8px">2 pending changes</span>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#E8743B","options":["#E8743B","#5B9BFF","#4FC48A","#C792EA"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { accent: this.props.accent ?? '#E8743B' };
+  }
+}
+</script>
+</body>
+</html>

@@ -5,6 +5,7 @@
 # IDE files
 .idea/
 .vscode/
+.claude/
 *.swp
 *.iml
 

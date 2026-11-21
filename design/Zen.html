@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>R.I.D.E — Zen mode</title>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#1A1B1F}
+a{color:#7FB6FF}a:hover{color:#A9CCFF}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-direction: column; background: #1A1B1F; color: #E6E7EA; font-family: Inter, 'Segoe UI', system-ui, sans-serif; font-size: 13px; overflow: hidden; position: relative">
+
+  <header style="height: 44px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 16px">
+    <div style="width: 22px; height: 22px; border-radius: 6px; background: #E8743B; color: #17181B; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">R</div>
+    <span style="color: #9A9DA6">ride-desktop / src /</span><span style="margin-left: -8px">commands.rs</span><span style="width: 7px; height: 7px; border-radius: 50%; background: #C5C8CF"></span>
+    <div style="flex: 1"></div>
+    <div role="group" aria-label="Layout" style="display: flex; padding: 2px; gap: 2px; border-radius: 8px; background: #1F2024; border: 1px solid #2E3036">
+      <button aria-pressed="false" style="border: 0; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: none; color: #9A9DA6">Editor</button>
+      <button aria-pressed="false" style="border: 0; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: none; color: #9A9DA6">Agent</button>
+      <button aria-pressed="true" style="border: 0; font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; background: #2E3036; color: #E6E7EA">Zen</button>
+    </div>
+    <button aria-label="Toggle assistant" style="width: 32px; height: 32px; border: 0; border-radius: 8px; background: none; color: #9A9DA6; display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="15" y1="4" x2="15" y2="20"></line></svg></button>
+  </header>
+
+  <main style="flex: 1; min-height: 0; overflow: hidden; display: flex; justify-content: center">
+    <div style="width: 100%; max-width: 880px; padding: 40px 32px 0; box-sizing: border-box; display: flex; flex-direction: column; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 14px; line-height: 24px; color: #C5C8CF">
+<pre style="margin: 0; font: inherit; white-space: pre; overflow: hidden"><span style="color: #7C818C">/// Read file content from disk, relative to the workspace root.</span>
+<span style="color: #868A94">#[tauri::command]</span>
+<span style="color: #D4A0FF">pub async fn</span> <span style="color: #7FB6FF">read_file</span>(path: <span style="color: #F2C46D">String</span>) -&gt; <span style="color: #F2C46D">Result</span>&lt;<span style="color: #F2C46D">String</span>, <span style="color: #F2C46D">String</span>&gt; {
+<span style="display: block; background: #2A2C33; border-radius: 3px">    <span style="color: #D4A0FF">let</span> clean_path = path.<span style="color: #7FB6FF">trim</span>().<span style="color: #7FB6FF">trim_matches</span>(<span style="color: #A8D886">'"'</span>);</span><span style="display: block; background: #2A2C33; border-radius: 3px">    std::fs::<span style="color: #7FB6FF">read_to_string</span>(clean_path).<span style="color: #7FB6FF">map_err</span>(|e| e.<span style="color: #7FB6FF">to_string</span>())</span>}</pre>
+
+      <div style="margin: 12px 0 12px -12px; width: calc(100% + 24px); max-width: 680px; border-radius: 12px; border: 1px solid #3A3D44; background: #222328; box-shadow: 0 18px 48px rgba(0,0,0,0.45); font-family: Inter, 'Segoe UI', system-ui, sans-serif; font-size: 13px; line-height: 1.5; display: flex; flex-direction: column">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#E8743B" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"></path></svg>
+          <label for="inline" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Edit instruction</label>
+          <input id="inline" value="resolve against workspace root and use tokio::fs" style="flex: 1; border: 0; outline: none; background: none; color: #E6E7EA; font: inherit">
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: #2E3036; color: #A9ADB6">Esc</span>
+        </div>
+        <pre style="margin: 0; padding: 6px 0; border-top: 1px solid #2E3036; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; line-height: 21px; overflow: hidden"><span style="display: block; padding: 0 14px; background: #3A2226; color: #F5B5BB">-    let clean_path = path.trim().trim_matches('"');</span><span style="display: block; padding: 0 14px; background: #3A2226; color: #F5B5BB">-    std::fs::read_to_string(clean_path).map_err(|e| e.to_string())</span><span style="display: block; padding: 0 14px; background: #1E3328; color: #A8E2BE">+    let full = resolve_in_workspace(&amp;path)?;</span><span style="display: block; padding: 0 14px; background: #1E3328; color: #A8E2BE">+    tokio::fs::read_to_string(&amp;full).await.map_err(|e| e.to_string())</span></pre>
+        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid #2E3036">
+          <button style="height: 28px; padding: 0 12px; border: 0; border-radius: 6px; background: #E8743B; color: #17181B; font: inherit; font-size: 12px; font-weight: 600">Accept  Ctrl ⏎</button>
+          <button style="height: 28px; padding: 0 12px; border: 1px solid #3A3D44; border-radius: 6px; background: none; color: #E6E7EA; font: inherit; font-size: 12px">Reject</button>
+          <div style="flex: 1"></div>
+          <span style="font-size: 12px; color: #868A94">qwen2.5-coder:7b · 1.4 s</span>
+        </div>
+      </div>
+
+<pre style="margin: 0; font: inherit; white-space: pre; overflow: hidden; color: #868A94">
+<span style="color: #7C818C">/// Save file content to disk. Creates parent directories if necessary.</span>
+<span style="color: #868A94">#[tauri::command]</span>
+<span style="color: #D4A0FF">pub async fn</span> <span style="color: #7FB6FF">save_file</span>(path: <span style="color: #F2C46D">String</span>, content: <span style="color: #F2C46D">String</span>) -&gt; <span style="color: #F2C46D">Result</span>&lt;<span style="color: #F2C46D">String</span>, <span style="color: #F2C46D">String</span>&gt; {
+    <span style="color: #D4A0FF">let</span> full = <span style="color: #7FB6FF">resolve_in_workspace</span>(&amp;path)?;
+    <span style="color: #D4A0FF">if let</span> <span style="color: #F2C46D">Some</span>(parent) = full.<span style="color: #7FB6FF">parent</span>() {
+        tokio::fs::<span style="color: #7FB6FF">create_dir_all</span>(parent).<span style="color: #D4A0FF">await</span>.<span style="color: #7FB6FF">ok</span>();
+    }</pre>
+    </div>
+  </main>
+
+  <div style="position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; padding: 8px 14px; border-radius: 20px; background: #222328; border: 1px solid #2E3036; font-size: 12px; color: #A9ADB6">
+    <span style="display: flex; align-items: center; gap: 6px"><span style="width: 6px; height: 6px; border-radius: 50%; background: #4FC48A"></span>Ollama</span>
+    <span>Ln 4, Col 5</span>
+    <span style="display: flex; align-items: center; gap: 6px"><span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 1px 5px; border-radius: 4px; background: #2E3036">Ctrl K</span>edit inline</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#E8743B","options":["#E8743B","#5B9BFF","#4FC48A","#C792EA"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { accent: this.props.accent ?? '#E8743B' };
+  }
+}
+</script>
+</body>
+</html>
