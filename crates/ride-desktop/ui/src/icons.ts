@@ -43,3 +43,58 @@ export type IconName = keyof typeof PATHS;
 export function icon(name: IconName, extraClass = ''): string {
   return `<svg class="icon${extraClass ? ' ' + extraClass : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PATHS[name]}</svg>`;
 }
+
+export function rideLogoSvg(size = 22, extraClass = ''): string {
+  return `<svg class="ride-logo-svg${extraClass ? ' ' + extraClass : ''}" viewBox="0 0 1024 1024" width="${size}" height="${size}" fill="none" aria-hidden="true">
+    <defs>
+      <radialGradient id="rideBgGlow" cx="50%" cy="50%" r="65%">
+        <stop offset="0%" stop-color="#141C30"/>
+        <stop offset="60%" stop-color="#0A0D16"/>
+        <stop offset="100%" stop-color="#05070B"/>
+      </radialGradient>
+      <linearGradient id="rideRustGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="#FFAE00"/>
+        <stop offset="35%" stop-color="#FF6B00"/>
+        <stop offset="100%" stop-color="#D94100"/>
+      </linearGradient>
+      <linearGradient id="rideThrustGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#FF6B00"/>
+        <stop offset="50%" stop-color="#FF9A22"/>
+        <stop offset="100%" stop-color="#EF4444"/>
+      </linearGradient>
+    </defs>
+    <rect x="40" y="40" width="944" height="944" rx="200" fill="url(#rideBgGlow)" stroke="#2D3C5A" stroke-width="16"/>
+    <circle cx="512" cy="512" r="320" fill="#FF6B00" opacity="0.12"/>
+    <circle cx="530" cy="430" r="180" fill="#00E5FF" opacity="0.16"/>
+    <rect x="220" y="210" width="70" height="600" rx="14" fill="url(#rideRustGrad)"/>
+    <rect x="315" y="210" width="50" height="600" rx="10" fill="url(#rideRustGrad)" opacity="0.9"/>
+    <g fill="#00E5FF">
+      <rect x="205" y="315" width="20" height="10" rx="4"/>
+      <circle cx="190" cy="320" r="6"/>
+      <line x1="196" y1="320" x2="205" y2="320" stroke="#00E5FF" stroke-width="3"/>
+      <rect x="205" y="425" width="20" height="10" rx="4"/>
+      <circle cx="190" cy="430" r="6"/>
+      <line x1="196" y1="430" x2="205" y2="430" stroke="#00E5FF" stroke-width="3"/>
+      <rect x="205" y="535" width="20" height="10" rx="4"/>
+      <circle cx="190" cy="540" r="6"/>
+      <line x1="196" y1="540" x2="205" y2="540" stroke="#00E5FF" stroke-width="3"/>
+      <rect x="205" y="645" width="20" height="10" rx="4"/>
+      <circle cx="190" cy="650" r="6"/>
+      <line x1="196" y1="650" x2="205" y2="650" stroke="#00E5FF" stroke-width="3"/>
+    </g>
+    <path d="M 365 210 L 620 210 Q 790 210 790 390 Q 790 570 620 570 L 365 570 L 365 485 L 600 485 Q 695 485 695 390 Q 695 295 600 295 L 365 295 Z" fill="url(#rideRustGrad)"/>
+    <path d="M 480 520 L 600 520 L 805 785 Q 825 810 790 810 L 710 810 L 560 610 L 460 610 Z" fill="url(#rideThrustGrad)"/>
+    <path d="M 580 530 L 610 530 L 825 810 L 795 810 Z" fill="#FFD700" opacity="0.9"/>
+    <g transform="translate(520, 390)">
+      <circle cx="0" cy="0" r="85" fill="#00E5FF" opacity="0.3"/>
+      <line x1="-140" y1="0" x2="140" y2="0" stroke="#00E5FF" stroke-width="4" opacity="0.7"/>
+      <circle cx="-140" cy="0" r="6" fill="#00E5FF"/>
+      <circle cx="140" cy="0" r="6" fill="#00E5FF"/>
+      <polygon points="0,-75 -55,0 0,0" fill="#38BDF8"/>
+      <polygon points="0,-75 55,0 0,0" fill="#7DD3FC"/>
+      <polygon points="0,75 -55,0 0,0" fill="#0284C7"/>
+      <polygon points="0,75 55,0 0,0" fill="#0EA5E9"/>
+      <polygon points="0,-24 16,0 0,24 -16,0" fill="#FFFFFF"/>
+    </g>
+  </svg>`;
+}

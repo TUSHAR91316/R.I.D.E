@@ -271,12 +271,12 @@ const mockTree: Record<string, DirEntryInfo[]> = {
 };
 
 const mockFiles: Record<string, string> = {
-  'README.md': '# R.I.D.E\n\n**R.I.D.E** (Rust Intelligent Development Environment) is a lightweight, local-first code editor.\n',
-  'Cargo.toml': '[workspace]\nresolver = "2"\nmembers = ["crates/*"]\n',
+  'README.md': '# R.I.D.E — Rust Intelligent Development Environment\n\n**R.I.D.E** is a sovereign, local-first code editor engineered by Byte-Labs.\nFeatures zero cloud telemetry, local MoE intelligence, and sub-millisecond discovery.\n',
+  'Cargo.toml': '[workspace]\nresolver = "2"\nmembers = [\n    "crates/ride-core",\n    "crates/ride-discovery",\n    "crates/ride-moe",\n    "crates/ride-skills",\n    "crates/ride-agent",\n    "crates/ride-desktop",\n]\n',
   'crates/ride-desktop/src/main.rs':
-    '// Browser preview: start the Tauri app to edit real files.\nmod commands;\n\nfn main() {\n    tauri::Builder::default()\n        .run(tauri::generate_context!())\n        .expect("error while running R.I.D.E");\n}\n',
+    '//! R.I.D.E — Rust Intelligent Development Environment\n//! Engineered by Byte-Labs. High-performance local MoE architecture.\n\nuse std::sync::Arc;\nuse ride_core::pipeline::ExecutionStream;\nuse ride_moe::{ExpertRouter, QuantumConfig};\n\n/// Sovereign runtime running zero-cloud neural inference.\npub struct IntelligentRuntime {\n    router: Arc<ExpertRouter>,\n    workspace: String,\n}\n\nimpl IntelligentRuntime {\n    /// Initializes the local-first MoE dispatcher with NVMe streaming.\n    pub async fn new(workspace: impl Into<String>) -> Result<Self, Box<dyn std::error::Error>> {\n        let config = QuantumConfig::local_defaults();\n        let router = ExpertRouter::boot(config).await?;\n        Ok(Self {\n            router: Arc::new(router),\n            workspace: workspace.into(),\n        })\n    }\n\n    /// Dispatches an asynchronous turn across sovereign expert models.\n    pub async fn dispatch_turn(&self, prompt: &str) -> ExecutionStream {\n        self.router.route_expert_parallel(prompt).await\n    }\n}\n',
   'crates/ride-desktop/src/commands.rs':
-    '/// Tauri IPC commands for the R.I.D.E desktop application.\n#[tauri::command]\npub async fn read_file(path: String) -> Result<String, String> {\n    todo!()\n}\n',
+    '/// Tauri IPC commands for the R.I.D.E desktop application.\n#[tauri::command]\npub async fn read_file(path: String) -> Result<String, String> {\n    tokio::fs::read_to_string(&path)\n        .await\n        .map_err(|e| format!("Failed to read {path}: {e}"))\n}\n',
 };
 
 async function mockInvoke<T>(cmd: string, args?: Record<string, any>): Promise<T> {

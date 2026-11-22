@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  IgnorableNamespaces="uap uap3 uap10 rescap desktop">
+
+  <!-- Identity strictly mapped to Microsoft Partner Center Registration -->
+  <Identity
+    Name="Byte-Labs.R.I.D.E"
+    Publisher="CN=6CDD7E10-2EAB-4D1D-B6CA-5D8F278050DF"
+    Version="2.0.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>R.I.D.E</DisplayName>
+    <PublisherDisplayName>Byte-Labs</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>R.I.D.E (Rust Intelligent Development Environment) is a sovereign, high-performance desktop IDE featuring on-device MoE intelligence, zero cloud telemetry, multi-model orchestrator, and real-time execution engine engineered by Byte-Labs.</Description>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="x-generate" />
+  </Resources>
+
+  <Applications>
+    <Application Id="RIDE" Executable="ride-desktop.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="R.I.D.E"
+        Description="Rust Intelligent Development Environment by Byte-Labs"
+        BackgroundColor="#0A0D16"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+
+        <uap:DefaultTile
+          Wide310x150Logo="Assets\Wide310x150Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png"
+          Square71x71Logo="Assets\Square71x71Logo.png">
+          <uap:ShowNameOnTiles>
+            <uap:ShowOn Tile="square150x150Logo" />
+            <uap:ShowOn Tile="wide310x150Logo" />
+            <uap:ShowOn Tile="square310x310Logo" />
+          </uap:ShowNameOnTiles>
+        </uap:DefaultTile>
+
+        <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#0A0D16" />
+      </uap:VisualElements>
+
+      <Extensions>
+        <!-- Command Line Execution Alias (ride.exe in Windows Terminal / CMD) -->
+        <uap3:Extension Category="windows.appExecutionAlias">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="ride.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+
+        <!-- File Type Associations for Rust & Project Configurations -->
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="rustsource">
+            <uap:DisplayName>Rust Source File</uap:DisplayName>
+            <uap:Logo>Assets\Square44x44Logo.png</uap:Logo>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.rs</uap:FileType>
+              <uap:FileType>.toml</uap:FileType>
+              <uap:FileType>.ride</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Desktop Bridge capability required for developer IDE compilation and local process execution -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

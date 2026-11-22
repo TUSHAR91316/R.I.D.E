@@ -1,5 +1,5 @@
 import type { UiLayout } from '../types';
-import { icon } from '../icons';
+import { icon, rideLogoSvg } from '../icons';
 
 export interface TitleBarHandlers {
   onLayout: (layout: UiLayout) => void;
@@ -23,7 +23,7 @@ export class TitleBar {
     this.element.className = 'titlebar';
     this.element.innerHTML = `
       <div class="tb-brand">
-        <span class="tb-logo" aria-hidden="true">R</span>
+        ${rideLogoSvg(22, 'tb-logo')}
         <button type="button" class="tb-workspace" data-act="folder" title="Open folder…">${icon('folder')}<span>Workspace</span></button>
       </div>
       <div class="tb-center">

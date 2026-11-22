@@ -196,10 +196,52 @@ class RideApplication {
     window.addEventListener('beforeunload', (e) => {
       if (this.editor.hasUnsavedChanges()) e.preventDefault();
     });
+
+    // Query parameters for screenshot automation and layout testing
+    const urlParams = new URLSearchParams(window.location.search);
+    const reqLayout = urlParams.get('layout') as UiLayout | null;
+    if (reqLayout && (reqLayout === 'vs_code' || reqLayout === 'claude_code' || reqLayout === 'codex')) {
+      void this.switchLayout(reqLayout);
+    }
+    const reqView = urlParams.get('view');
+    if (reqView) {
+      this.vscode.showView(reqView as any);
+    }
+    if (urlParams.get('mockChat') === '1') {
+      this.state.messages = [
+        {
+          id: 'm1',
+          role: 'user',
+          content: 'Analyze crates/ride-moe expert router and verify zero-copy stream performance under local NVMe execution.',
+          timestamp: Date.now() - 60000,
+        },
+        {
+          id: 'm2',
+          role: 'assistant',
+          content: 'I analyzed `crates/ride-moe/src/router.rs` and the memory-mapped tensor pipeline.\n\n### Audit Summary\n1. **Zero-Copy Streaming**: Expert weights are loaded via `memmap2::Mmap` with aligned 64-byte chunks, avoiding heap allocations.\n2. **Sub-millisecond Latency**: Kernel dispatch is scheduled on dedicated Tokio async worker pools.\n3. **Local Privacy**: Model execution runs strictly on-device without external telemetry.',
+          thoughts: [
+            'Inspecting crates/ride-moe/src/router.rs for mmap borrow lifecycles',
+            'Validating AVX2/AVX-512 tensor SIMD vectorization',
+            'Testing local model dispatch via Ollama & ColibriMoE sockets',
+          ],
+          toolCalls: [
+            {
+              name: 'run_command',
+              args: { command: 'cargo test -p ride-moe -- --nocapture' },
+              output: 'test result: ok. 42 passed; 0 failed (0.038s)',
+              status: 'success',
+            },
+          ],
+          timestamp: Date.now() - 30000,
+        },
+      ];
+      this.state.rev.messages++;
+      this.render();
+    }
   }
 
   private async openStartupFile(): Promise<void> {
-    for (const candidate of ['README.md', 'Cargo.toml', 'package.json']) {
+    for (const candidate of ['crates/ride-desktop/src/main.rs', 'README.md', 'Cargo.toml']) {
       try {
         const content = await api.readFile(candidate);
         await this.editor.openFile(candidate, content);

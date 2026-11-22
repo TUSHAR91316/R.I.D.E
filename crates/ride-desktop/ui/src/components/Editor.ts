@@ -5,7 +5,7 @@ import { HighlightStyle, StreamLanguage, syntaxHighlighting, type LanguageSuppor
 import { indentWithTab } from '@codemirror/commands';
 import { tags as t } from '@lezer/highlight';
 import * as api from '../api';
-import { icon } from '../icons';
+import { icon, rideLogoSvg } from '../icons';
 import { askText, basename, confirmDialog, esc, fileKind, fileSwatch, kindLabel, toast, type FileKind } from '../util';
 
 export interface EditorTab {
@@ -142,7 +142,7 @@ function loadLanguage(kind: FileKind): Promise<Extension> {
 }
 
 const WELCOME = `<div class="editor-empty">
-  <div class="logo-xl" aria-hidden="true">R</div>
+  <div class="logo-xl" aria-hidden="true">${rideLogoSvg(64)}</div>
   <div class="shortcut-grid">
     <span>Command palette</span><span class="kbd">Ctrl K</span>
     <span>Open file by path</span><span class="kbd">Ctrl O</span>
