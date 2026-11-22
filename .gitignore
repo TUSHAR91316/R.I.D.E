@@ -21,7 +21,6 @@ models/
 node_modules/
 **/node_modules/
 
-# Microsoft Store staging and build output
-msstore/staging/
-msstore/dist/
+# Microsoft Store packaging kit and build outputs
+msstore/
 

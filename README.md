@@ -142,6 +142,15 @@ When you ask a question containing any of the trigger words, the editor automati
 
 ---
 
+## Privacy & Telemetry
+
+R.I.D.E is engineered with **zero cloud telemetry**. Your code, keystrokes, configurations, and AI prompts never leave your local machine:
+- **No Remote Analytics:** No tracking, telemetry, or remote telemetry servers.
+- **Localhost Loopback Only:** Local inference (Ollama, LM Studio, ColibriMoE, Llama.cpp) communicates exclusively over `127.0.0.1`.
+- **Full Privacy Policy:** Review our complete [Privacy Policy](file:///g:/Projects/R.I.D.E/PRIVACY_POLICY.md) for full compliance details (Microsoft Store, GDPR, CCPA).
+
+---
+
 ## License
 
 This project is licensed under the MIT License.
