@@ -1,6 +1,14 @@
 # R.I.D.E
 
-**R.I.D.E** (Rust Intelligent Development Environment) is a lightweight, local-first code editor designed for developers running language models on their own hardware. It is written in Rust, starts in roughly 500 milliseconds, and runs within a 60 MB memory footprint.
+[![Microsoft Store](https://img.shields.io/badge/Microsoft_Store-Get_R.I.D.E-0078D4?style=for-the-badge&logo=microsoft-store&logoColor=white)](https://apps.microsoft.com/detail/9PP3JK8T30DW?hl=en-us&gl=IN&ocid=pdpshare)
+[![Version 2.0.0](https://img.shields.io/badge/version-2.0.0-blue.svg?style=for-the-badge)](https://github.com/TUSHAR91316/R.I.D.E/releases/tag/v2.0.0)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
+
+**R.I.D.E** (Rust Intelligent Development Environment) by **Byte-Labs** is a lightweight, local-first code editor designed for developers running language models on their own hardware. It is written in Rust, starts in roughly 500 milliseconds, and runs within a 60 MB memory footprint.
+
+> **Official Microsoft Store Listing:**  
+> Install directly on Windows 10 & 11 with verified security and automatic background updates:  
+> 🔗 **[https://apps.microsoft.com/detail/9PP3JK8T30DW](https://apps.microsoft.com/detail/9PP3JK8T30DW?hl=en-us&gl=IN&ocid=pdpshare)**
 
 ---
 
@@ -95,19 +103,38 @@ crates/
 
 ## Getting Started
 
-### Prerequisites
+### Installation
+
+#### Option 1: Microsoft Store (Recommended for Windows)
+
+Install directly from the official Microsoft Store with automatic background updates:
+
+👉 **[Download R.I.D.E on the Microsoft Store](https://apps.microsoft.com/detail/9PP3JK8T30DW?hl=en-us&gl=IN&ocid=pdpshare)**
+
+Or install via Windows Package Manager (`winget`):
+```powershell
+winget install 9PP3JK8T30DW
+```
+
+#### Option 2: Pre-compiled Binaries (GitHub Releases)
+
+Download standalone `.exe` packages and signed installers from [GitHub Releases](https://github.com/TUSHAR91316/R.I.D.E/releases/latest).
+
+#### Option 3: Building from Source
+
+##### Prerequisites
 - Rust 1.80 or newer with Cargo
 - Visual Studio 2022 C++ Build Tools (on Windows) or standard GCC/Clang tooling (on Linux/macOS)
 - Any running local inference provider (Ollama, LM Studio, or Rabbit)
 
-### Building from Source
+##### Build Steps
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/ride.git
-cd ride
+git clone https://github.com/TUSHAR91316/R.I.D.E.git
+cd R.I.D.E
 
-# Run the test suite (116 tests across all crates)
+# Run the test suite (184 tests across all workspace crates)
 cargo test --workspace
 
 # Build an optimized release binary
